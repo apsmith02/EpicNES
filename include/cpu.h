@@ -2,6 +2,40 @@
 #define CPU_H
 
 #include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+
+//Opcode names for disassembly
+static const char* OPCODE_NAMES[256] = {
+    "BRK","ORA",NULL,NULL, NULL,"ORA","ASL",NULL, "PHP","ORA","ASLA",NULL,NULL,"ORA","ASL",NULL,
+    "BPL","ORA",NULL,NULL, NULL,"ORA","ASL",NULL, "CLC","ORA",NULL,NULL, NULL,"ORA","ASL",NULL,
+    "JSR","AND",NULL,NULL, "BIT","AND","ROL",NULL, "PLP","AND","ROLA",NULL,"BIT","AND","ROL",NULL,
+    "BMI","AND",NULL,NULL, NULL,"AND","ROL",NULL, "SEC","AND",NULL,NULL, NULL,"AND","ROL",NULL,
+    "RTI","EOR",NULL,NULL, NULL,"EOR","LSR",NULL, "PHA","EOR","LSRA",NULL,"JMP","EOR","LSR",NULL,
+    "BVC","EOR",NULL,NULL, NULL,"EOR","LSR",NULL, "CLI","EOR",NULL,NULL, NULL,"EOR","LSR",NULL,
+    "RTS","ADC",NULL,NULL, NULL,"ADC","ROR",NULL, "PLA","ADC","RORA",NULL,"JMP","ADC","ROR",NULL,
+    "BVS","ADC",NULL,NULL, NULL,"ADC","ROR",NULL, "SEI","ADC",NULL,NULL, NULL,"ADC","ROR",NULL,
+    NULL,"STA",NULL,NULL, "STY","STA","STX",NULL, "DEY",NULL,"TXA",NULL, "STY","STA","STX",NULL,
+    "BCC","STA",NULL,NULL, "STY","STA","STX",NULL, "TYA","STA","TXS",NULL, NULL,"STA",NULL,NULL,
+    "LDY","LDA","LDX",NULL, "LDY","LDA","LDX",NULL, "TAY","LDA","TAX",NULL, "LDY","LDA","LDX",NULL,
+    "BCS","LDA",NULL,NULL, "LDY","LDA","LDX",NULL, "CLV","LDA","TSX",NULL, "LDY","LDA","LDX",NULL,
+    "CPY","CMP",NULL,NULL, "CPY","CMP","DEC",NULL, "INY","CMP","DEX",NULL, "CPY","CMP","DEC",NULL,
+    "BNE","CMP",NULL,NULL, NULL,"CMP","DEC",NULL, "CLD","CMP",NULL,NULL, NULL,"CMP","DEC",NULL,
+    "CPX","SBC",NULL,NULL, "CPX","SBC","INC",NULL, "INX","SBC","NOP",NULL, "CPX","SBC","INC",NULL,
+    "BEQ","SBC",NULL,NULL, NULL,"SBC","INC",NULL, "SED","SBC",NULL,NULL, NULL,"SBC","INC",NULL
+};
+
+//Memory access type bit flags
+typedef enum {
+    ACCESS_READ         = 1,
+    ACCESS_WRITE        = 1 << 1,
+    ACCESS_EXECUTE      = 1 << 2,
+    ACCESS_DUMMY        = 1 << 3,
+
+    ACCESS_DUMMY_READ   = ACCESS_DUMMY | ACCESS_READ,
+    ACCESS_DUMMY_WRITE  = ACCESS_DUMMY | ACCESS_WRITE
+} AccessType;
+
 
 //CPU status flags
 typedef enum {
@@ -33,16 +67,25 @@ typedef struct {
 
 typedef uint8_t(*CPUReadFn)(void*, uint16_t);
 typedef void(*CPUWriteFn)(void*, uint16_t, uint8_t);
+typedef CPUReadFn CPUPeekFn;
 
 typedef struct {
     //Callback functions
 
     CPUReadFn readfn;
     CPUWriteFn writefn;
+    CPUPeekFn peekfn;
     void* fndata;
 
     //CPU state
     CPUState state;
+    bool oamdma; //Set when OAMDMA ($4014) is written, causes CPU_Exec to begin OAM DMA after the current instruction.
+    uint8_t oamdma_page;
+
+    //Log file
+    FILE* log;
+
+    //
 } CPU;
 
 
@@ -55,6 +98,15 @@ typedef struct {
 * @param fndata Pointer to data that is passed to the read/write callbacks, such as the CPU's memory.
 */
 void CPU_Init(CPU* cpu, CPUReadFn readfn, CPUWriteFn writefn, void* fndata);
+
+/*
+* CPU_SetPeekFn - Set the CPU Peek callback. This is not required for CPU execution, but is used by
+* functions like CPU_Disassemble() to peek at values in memory without any side effects.
+* The peek function is passed the same data pointer that is passed to the read/write callbacks.
+*/
+void CPU_SetPeekFn(CPU* cpu, CPUPeekFn peekfn);
+
+
 
 //Reset the CPU from its power-on state. Runs the reset sequence, which does 7 read cycles.
 void CPU_PowerOn(CPU* cpu);
@@ -72,6 +124,22 @@ int CPU_Exec(CPU* cpu);
 /*
 * Trigger an NMI.
 */
-void NMI(CPU* cpu);
+void CPU_NMI(CPU* cpu);
+
+/*
+* Print the disassembly of an instruction at an address to a string buffer of size n.
+* Requires the CPU Peek callback to be set with CPU_SetPeekFn().
+* String format: [address] \t[opcode byte] [operand byte 1] [operand byte 2] \t[instruction name] [operand]
+*
+* @return Instruction length
+*/
+int CPU_Disassemble(CPU* cpu, uint16_t instr_addr, char* buffer, size_t n);
+
+/*
+* Set log file stream.
+*
+* @param log Log file stream
+*/
+void CPU_SetLogFile(CPU* cpu, FILE* logfile);
 
 #endif

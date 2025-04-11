@@ -37,7 +37,7 @@ void test_CPU_PowerOn() {
 
     CPU_Init(&cpu, &ram_read, &ram_write, ram);
     CPU_PowerOn(&cpu);
-    assert_cpu_regs(&cpu.state, 0xABCD, 0, 0, 0, 0xFD, 0x04);
+    assert_cpu_regs(&cpu.state, 0xABCD, 0, 0, 0, 0xFD, 0x24);
 }
 
 void test_LDAimm()

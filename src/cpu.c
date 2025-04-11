@@ -1,5 +1,6 @@
 #include "cpu.h"
 #include <string.h>
+#include <assert.h>
 
 // Addressing modes
 typedef enum { 
@@ -14,171 +15,182 @@ typedef enum {
 
 /* PRIVATE FUNCTIONS */
 
-uint8_t Read(CPU* cpu, uint16_t addr) {
+static uint8_t Read(CPU* cpu, uint16_t addr) {
     cpu->state.cycles++;
     return cpu->readfn(cpu->fndata, addr);
 }
 
-void Write(CPU* cpu, uint16_t addr, uint8_t data) {
+static void Write(CPU* cpu, uint16_t addr, uint8_t data) {
     cpu->state.cycles++;
-    return cpu->writefn(cpu->fndata, addr, data);
+    if (addr != 0x4014) {
+        cpu->writefn(cpu->fndata, addr, data);
+    } else {
+        //$4014: OAMDMA
+        cpu->oamdma = true;
+        cpu->oamdma_page = data;
+    }
+}
+
+static uint8_t Peek(CPU* cpu, uint16_t addr) {
+    assert(cpu->peekfn != NULL);
+    return cpu->peekfn(cpu->fndata, addr);
 }
 
 //Does not handle page boundary crossing (the high byte will always be fetched from the same page as the low byte)
-uint16_t ReadWord(CPU* cpu, uint16_t addr) {
+static uint16_t ReadWord(CPU* cpu, uint16_t addr) {
     return Read(cpu, addr) | Read(cpu, ((addr + 1) & 0xFF) | (addr & 0xFF00)) << 8;
 }
 
-uint8_t FetchByte(CPU* cpu) {
+static uint8_t FetchByte(CPU* cpu) {
     return Read(cpu, cpu->state.pc++);
 }
 
-uint16_t FetchWord(CPU* cpu) {
+static uint16_t FetchWord(CPU* cpu) {
     return FetchByte(cpu) | FetchByte(cpu) << 8;
 }
 
-uint16_t StackAddr(CPU* cpu) {
+static uint16_t StackAddr(CPU* cpu) {
     return 0x0100 + cpu->state.s;
 }
 
-uint8_t ReadStack(CPU* cpu) {
+static uint8_t ReadStack(CPU* cpu) {
     return Read(cpu, StackAddr(cpu));
 }
 
-void Push(CPU* cpu, uint8_t val) {
+static void Push(CPU* cpu, uint8_t val) {
     Write(cpu, StackAddr(cpu), val);
     cpu->state.s--;
 }
 
-uint8_t Pop(CPU* cpu) {
+static uint8_t Pop(CPU* cpu) {
     cpu->state.s++;
-    ReadStack(cpu);
+    return ReadStack(cpu);
 }
 
-void DummyPush(CPU* cpu) {
+static void DummyPush(CPU* cpu) {
     Read(cpu, StackAddr(cpu));
     cpu->state.s--;
 }
 
-void PushPC(CPU* cpu) {
+static void PushPC(CPU* cpu) {
     Push(cpu, cpu->state.pc >> 8);
     Push(cpu, cpu->state.pc);
 }
 
-void PopPC(CPU* cpu) {
+static void PopPC(CPU* cpu) {
     cpu->state.pc = Pop(cpu) | Pop(cpu) << 8;
 }
 
 //Use this to keep the unused flag (bit 5) set and the B flag (bit 4) clear when recovering P from the stack
-void PopP(CPU* cpu) {
+static void PopP(CPU* cpu) {
     cpu->state.p = Pop(cpu) & ~CPU_FLAG_B | CPU_FLAG_UNUSED;
 }
 
 //Fetch/calculate address by addressing mode for all modes except implied, accumulator and relative.
-uint16_t FetchAddr(CPU* cpu, AddrMode mode, int forWrite);
-uint8_t ReadByMode(CPU* cpu, AddrMode mode) {
+static uint16_t FetchAddr(CPU* cpu, AddrMode mode, int forWrite);
+static uint8_t ReadByMode(CPU* cpu, AddrMode mode) {
     return Read(cpu, FetchAddr(cpu, mode, 0));
 }
 //Read value by addressing mode, then dummy write back value.
-uint8_t RMWReadByMode(CPU* cpu, AddrMode mode, uint16_t* outAddr) {
+static uint8_t RMWReadByMode(CPU* cpu, AddrMode mode, uint16_t* outAddr) {
     *outAddr = FetchAddr(cpu, mode, 1);
     uint8_t val = Read(cpu, *outAddr);
     Write(cpu, *outAddr, val);
     return val;
 }
-void WriteByMode(CPU* cpu, AddrMode mode, uint8_t val) {
+static void WriteByMode(CPU* cpu, AddrMode mode, uint8_t val) {
     Write(cpu, FetchAddr(cpu, mode, 1), val);
 }
 
 //Add index to address for absolute X/Y and indexed indirect addressing. Does dummy read if there is a page crossing or a write/read-modify-write instruction is being executed.
-uint16_t AddrAddIndex(CPU* cpu, uint16_t base, uint8_t index, int forWrite) {
+static uint16_t AddrAddIndex(CPU* cpu, uint16_t base, uint8_t index, int forWrite) {
     uint16_t addr = base + index;
     if (forWrite || (addr & 0xFF00) != (base & 0xFF00))
         Read(cpu, addr - ((addr & 0xFF00) - (base & 0xFF00)));
     return addr;
 }
 
-void UpdateNZ(CPU* cpu, uint8_t val);
+static void UpdateNZ(CPU* cpu, uint8_t val);
 
-void OpADC(CPU* cpu, uint8_t val);
-void OpCMP(CPU* cpu, uint8_t a, uint8_t b);
-uint8_t OpASL(CPU* cpu, uint8_t val);
-uint8_t OpLSR(CPU* cpu, uint8_t val);
-uint8_t OpROL(CPU* cpu, uint8_t val);
-uint8_t OpROR(CPU* cpu, uint8_t val);
+static void OpADC(CPU* cpu, uint8_t val);
+static void OpCMP(CPU* cpu, uint8_t a, uint8_t b);
+static uint8_t OpASL(CPU* cpu, uint8_t val);
+static uint8_t OpLSR(CPU* cpu, uint8_t val);
+static uint8_t OpROL(CPU* cpu, uint8_t val);
+static uint8_t OpROR(CPU* cpu, uint8_t val);
 
-void Branch(CPU* cpu, int takeBranch);
+static void Branch(CPU* cpu, int takeBranch);
 
 /* Execute cycles 2-7 of an interrupt (BRK, IRQ, NMI or reset) sequence.
 *  TODO: Implement interrupt hijacking.
 */
-void HandleInterrupt(CPU* cpu, InterruptType interrupt);
+static void HandleInterrupt(CPU* cpu, InterruptType interrupt);
 
 /* OPCODES */
 
-void ADC(CPU* cpu, AddrMode mode);
-void AND(CPU* cpu, AddrMode mode);
-void ASL(CPU* cpu, AddrMode mode);
-void ASLA(CPU* cpu, AddrMode mode);
-void BCC(CPU* cpu, AddrMode mode);
-void BCS(CPU* cpu, AddrMode mode);
-void BEQ(CPU* cpu, AddrMode mode);
-void BIT(CPU* cpu, AddrMode mode);
-void BMI(CPU* cpu, AddrMode mode);
-void BNE(CPU* cpu, AddrMode mode);
-void BPL(CPU* cpu, AddrMode mode);
-void BRK(CPU* cpu, AddrMode mode);
-void BVC(CPU* cpu, AddrMode mode);
-void BVS(CPU* cpu, AddrMode mode);
-void CLC(CPU* cpu, AddrMode mode);
-void CLD(CPU* cpu, AddrMode mode);
-void CLI(CPU* cpu, AddrMode mode);
-void CLV(CPU* cpu, AddrMode mode);
-void CMP(CPU* cpu, AddrMode mode);
-void CPX(CPU* cpu, AddrMode mode);
-void CPY(CPU* cpu, AddrMode mode);
-void DEC(CPU* cpu, AddrMode mode);
-void DEX(CPU* cpu, AddrMode mode);
-void DEY(CPU* cpu, AddrMode mode);
-void EOR(CPU* cpu, AddrMode mode);
-void INC(CPU* cpu, AddrMode mode);
-void INX(CPU* cpu, AddrMode mode);
-void INY(CPU* cpu, AddrMode mode);
-void JMP(CPU* cpu, AddrMode mode);
-void JSR(CPU* cpu, AddrMode mode);
-void LDA(CPU* cpu, AddrMode mode);
-void LDX(CPU* cpu, AddrMode mode);
-void LDY(CPU* cpu, AddrMode mode);
-void LSR(CPU* cpu, AddrMode mode);
-void LSRA(CPU* cpu, AddrMode mode);
-void NOP(CPU* cpu, AddrMode mode);
-void ORA(CPU* cpu, AddrMode mode);
-void PHA(CPU* cpu, AddrMode mode);
-void PHP(CPU* cpu, AddrMode mode);
-void PLA(CPU* cpu, AddrMode mode);
-void PLP(CPU* cpu, AddrMode mode);
-void ROL(CPU* cpu, AddrMode mode);
-void ROLA(CPU* cpu, AddrMode mode);
-void ROR(CPU* cpu, AddrMode mode);
-void RORA(CPU* cpu, AddrMode mode);
-void RTI(CPU* cpu, AddrMode mode);
-void RTS(CPU* cpu, AddrMode mode);
-void SBC(CPU* cpu, AddrMode mode);
-void SEC(CPU* cpu, AddrMode mode);
-void SED(CPU* cpu, AddrMode mode);
-void SEI(CPU* cpu, AddrMode mode);
-void STA(CPU* cpu, AddrMode mode);
-void STX(CPU* cpu, AddrMode mode);
-void STY(CPU* cpu, AddrMode mode);
-void TAX(CPU* cpu, AddrMode mode);
-void TAY(CPU* cpu, AddrMode mode);
-void TSX(CPU* cpu, AddrMode mode);
-void TXA(CPU* cpu, AddrMode mode);
-void TXS(CPU* cpu, AddrMode mode);
-void TYA(CPU* cpu, AddrMode mode);
+static void ADC(CPU* cpu, AddrMode mode);
+static void AND(CPU* cpu, AddrMode mode);
+static void ASL(CPU* cpu, AddrMode mode);
+static void ASLA(CPU* cpu, AddrMode mode);
+static void BCC(CPU* cpu, AddrMode mode);
+static void BCS(CPU* cpu, AddrMode mode);
+static void BEQ(CPU* cpu, AddrMode mode);
+static void BIT(CPU* cpu, AddrMode mode);
+static void BMI(CPU* cpu, AddrMode mode);
+static void BNE(CPU* cpu, AddrMode mode);
+static void BPL(CPU* cpu, AddrMode mode);
+static void BRK(CPU* cpu, AddrMode mode);
+static void BVC(CPU* cpu, AddrMode mode);
+static void BVS(CPU* cpu, AddrMode mode);
+static void CLC(CPU* cpu, AddrMode mode);
+static void CLD(CPU* cpu, AddrMode mode);
+static void CLI(CPU* cpu, AddrMode mode);
+static void CLV(CPU* cpu, AddrMode mode);
+static void CMP(CPU* cpu, AddrMode mode);
+static void CPX(CPU* cpu, AddrMode mode);
+static void CPY(CPU* cpu, AddrMode mode);
+static void DEC(CPU* cpu, AddrMode mode);
+static void DEX(CPU* cpu, AddrMode mode);
+static void DEY(CPU* cpu, AddrMode mode);
+static void EOR(CPU* cpu, AddrMode mode);
+static void INC(CPU* cpu, AddrMode mode);
+static void INX(CPU* cpu, AddrMode mode);
+static void INY(CPU* cpu, AddrMode mode);
+static void JMP(CPU* cpu, AddrMode mode);
+static void JSR(CPU* cpu, AddrMode mode);
+static void LDA(CPU* cpu, AddrMode mode);
+static void LDX(CPU* cpu, AddrMode mode);
+static void LDY(CPU* cpu, AddrMode mode);
+static void LSR(CPU* cpu, AddrMode mode);
+static void LSRA(CPU* cpu, AddrMode mode);
+static void NOP(CPU* cpu, AddrMode mode);
+static void ORA(CPU* cpu, AddrMode mode);
+static void PHA(CPU* cpu, AddrMode mode);
+static void PHP(CPU* cpu, AddrMode mode);
+static void PLA(CPU* cpu, AddrMode mode);
+static void PLP(CPU* cpu, AddrMode mode);
+static void ROL(CPU* cpu, AddrMode mode);
+static void ROLA(CPU* cpu, AddrMode mode);
+static void ROR(CPU* cpu, AddrMode mode);
+static void RORA(CPU* cpu, AddrMode mode);
+static void RTI(CPU* cpu, AddrMode mode);
+static void RTS(CPU* cpu, AddrMode mode);
+static void SBC(CPU* cpu, AddrMode mode);
+static void SEC(CPU* cpu, AddrMode mode);
+static void SED(CPU* cpu, AddrMode mode);
+static void SEI(CPU* cpu, AddrMode mode);
+static void STA(CPU* cpu, AddrMode mode);
+static void STX(CPU* cpu, AddrMode mode);
+static void STY(CPU* cpu, AddrMode mode);
+static void TAX(CPU* cpu, AddrMode mode);
+static void TAY(CPU* cpu, AddrMode mode);
+static void TSX(CPU* cpu, AddrMode mode);
+static void TXA(CPU* cpu, AddrMode mode);
+static void TXS(CPU* cpu, AddrMode mode);
+static void TYA(CPU* cpu, AddrMode mode);
 
 typedef void(*OpcodeFn)(CPU*, AddrMode);
-const OpcodeFn OPCODE_TABLE[256] = {
+static const OpcodeFn OPCODE_TABLE[256] = {
     &BRK,&ORA,NULL,NULL, NULL,&ORA,&ASL,NULL, &PHP,&ORA,&ASLA,NULL,NULL,&ORA,&ASL,NULL,
     &BPL,&ORA,NULL,NULL, NULL,&ORA,&ASL,NULL, &CLC,&ORA,NULL,NULL, NULL,&ORA,&ASL,NULL,
     &JSR,&AND,NULL,NULL, &BIT,&AND,&ROL,NULL, &PLP,&AND,&ROLA,NULL,&BIT,&AND,&ROL,NULL,
@@ -194,9 +206,10 @@ const OpcodeFn OPCODE_TABLE[256] = {
     &CPY,&CMP,NULL,NULL, &CPY,&CMP,&DEC,NULL, &INY,&CMP,&DEX,NULL, &CPY,&CMP,&DEC,NULL,
     &BNE,&CMP,NULL,NULL, NULL,&CMP,&DEC,NULL, &CLD,&CMP,NULL,NULL, NULL,&CMP,&DEC,NULL,
     &CPX,&SBC,NULL,NULL, &CPX,&SBC,&INC,NULL, &INX,&SBC,&NOP,NULL, &CPX,&SBC,&INC,NULL,
-    &BEQ,&SBC,NULL,NULL, NULL,&SBC,&INC,NULL, &SED,&SBC,NULL,NULL, NULL,&SBC,&INC,NULL,
+    &BEQ,&SBC,NULL,NULL, NULL,&SBC,&INC,NULL, &SED,&SBC,NULL,NULL, NULL,&SBC,&INC,NULL
 };
-const AddrMode MODE_TABLE[256] = {
+
+static const AddrMode ADDRMODE_TABLE[256] = {
     AD_IMP,AD_IDX,AD_IMP,AD_IDX,AD_ZPG,AD_ZPG,AD_ZPG,AD_ZPG,AD_IMP,AD_IMM,AD_ACC,AD_IMM,AD_ABS,AD_ABS,AD_ABS,AD_ABS,
     AD_REL,AD_IDY,AD_IMP,AD_IDY,AD_ZPX,AD_ZPX,AD_ZPX,AD_ZPX,AD_IMP,AD_ABY,AD_IMP,AD_ABY,AD_ABX,AD_ABX,AD_ABX,AD_ABX,
     AD_ABS,AD_IDX,AD_IMP,AD_IDX,AD_ZPG,AD_ZPG,AD_ZPG,AD_ZPG,AD_IMP,AD_IMM,AD_ACC,AD_IMM,AD_ABS,AD_ABS,AD_ABS,AD_ABS,
@@ -219,10 +232,15 @@ const AddrMode MODE_TABLE[256] = {
 /* PUBLIC FUNCTION DEFINITIONS */
 
 void CPU_Init(CPU* cpu, CPUReadFn readfn, CPUWriteFn writefn, void* fndata) {
-    memset(&cpu->state, 0, sizeof(CPUState));
+    memset(cpu, 0, sizeof(CPU));
     cpu->readfn = readfn;
     cpu->writefn = writefn;
     cpu->fndata = fndata;
+}
+
+void CPU_SetPeekFn(CPU *cpu, CPUPeekFn peekfn)
+{
+    cpu->peekfn = peekfn;
 }
 
 void CPU_PowerOn(CPU *cpu)
@@ -241,27 +259,114 @@ void CPU_SoftReset(CPU *cpu)
 
 int CPU_Exec(CPU *cpu)
 {
-    //Fetch
+    CPUState* state = &cpu->state;
+
+    //Fetch opcode
     uint8_t opcode = FetchByte(cpu);
     OpcodeFn opcodeFn = OPCODE_TABLE[opcode];
+
+    //Log opcode
+    if (cpu->log) {
+        uint16_t pc = cpu->state.pc - 1;
+        fprintf(cpu->log, "%04x ", pc);
+        if (OPCODE_NAMES[opcode]) {
+            fprintf(cpu->log, OPCODE_NAMES[opcode]);
+        } else {
+            fprintf(cpu->log, "Null");
+        }
+        fprintf(cpu->log, " A:%02x X:%02x Y:%02x S:%02x P:%02x CYC:%llu\n", state->a, state->x, state->y, state->s, state->p, state->cycles);
+    }
 
     //Some opcodes crash the CPU (or at this stage of development, aren't implemented yet). Return error if any of these opcodes are fetched.
     if (opcodeFn == NULL)
         return -1;
 
-    //Execute
-    opcodeFn(cpu, MODE_TABLE[opcode]);
+    //Execute instruction
+    opcodeFn(cpu, ADDRMODE_TABLE[opcode]);
+
+    //Begin OAM DMA
+    if (cpu->oamdma) {
+        Read(cpu, state->pc); //Halt cycle
+        if (state->cycles % 2 == 1) {
+            Read(cpu, state->pc); //Odd cycles: Alignment cycle
+        }
+
+        uint16_t addr = (uint16_t)cpu->oamdma_page << 8;
+        for (int i = 0; i < 256; i++, addr++) {
+            uint8_t data = Read(cpu, addr);
+            Write(cpu, 0x2004, data);
+        }
+
+        cpu->oamdma = false;
+    }
 
     //Handle interrupts
-    if (cpu->state.nmi) {
+    if (state->nmi) {
+        if (cpu->log)
+            fprintf(cpu->log, "NMI\n");
+        Read(cpu, state->pc);
         HandleInterrupt(cpu, IR_NMI);
-        cpu->state.nmi = 0;
+        state->nmi = 0;
     }
     
     return 0;
 }
 
-void NMI(CPU *cpu) { cpu->state.nmi = 1; }
+void CPU_NMI(CPU *cpu) { cpu->state.nmi = 1; }
+
+int CPU_Disassemble(CPU *cpu, uint16_t instr_addr, char *buffer, size_t n)
+{
+    uint8_t opcode = Peek(cpu, instr_addr);
+    uint8_t op1 = Peek(cpu, instr_addr + 1);
+    uint8_t op2 = Peek(cpu, instr_addr + 2);
+    const char* opcode_name = OPCODE_NAMES[opcode];
+
+    switch (ADDRMODE_TABLE[opcode]) {
+        case AD_IMP:
+            snprintf(buffer, n, "$%04X \t$%02X         \t%-4s", instr_addr, opcode, opcode_name);
+            return 1;
+        case AD_ACC:
+            snprintf(buffer, n, "$%04X \t$%02X         \t%-4s A", instr_addr, opcode, opcode_name);
+            return 1;
+        case AD_IMM:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X     \t%-4s #$%02X", instr_addr, opcode, op1, opcode_name, op1);
+            return 2;
+        case AD_ZPG:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X     \t%-4s $%02X", instr_addr, opcode, op1, opcode_name, op1);
+            return 2;
+        case AD_ZPX:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X     \t%-4s $%02X,X", instr_addr, opcode, op1, opcode_name, op1);
+            return 2;
+        case AD_ZPY:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X     \t%-4s $%02X,Y", instr_addr, opcode, op1, opcode_name, op1);
+            return 2;
+        case AD_REL:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X     \t%-4s $%02X", instr_addr, opcode, op1, opcode_name, instr_addr + 2 + (int8_t)op1);
+            return 2;
+        case AD_ABS:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X $%02X \t%-4s $%04X", instr_addr, opcode, op1, op2, opcode_name, (uint16_t)op2 << 8 | op1);
+            return 3;
+        case AD_ABX:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X $%02X \t%-4s $%04X,X", instr_addr, opcode, op1, op2, opcode_name, (uint16_t)op2 << 8 | op1);
+            return 3;
+        case AD_ABY:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X $%02X \t%-4s $%04X,Y", instr_addr, opcode, op1, op2, opcode_name, (uint16_t)op2 << 8 | op1);
+            return 3;
+        case AD_IND:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X $%02X \t%-4s ($%04X)", instr_addr, opcode, op1, op2, opcode_name, (uint16_t)op2 << 8 | op1);
+            return 3;
+        case AD_IDX:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X     \t%-4s ($%02X,X)", instr_addr, opcode, op1, opcode_name, op1);
+            return 2;
+        case AD_IDY:
+            snprintf(buffer, n, "$%04X \t$%02X $%02X     \t%-4s ($%02X),Y", instr_addr, opcode, op1, opcode_name, op1);
+            return 2;
+        default:
+            return 0;
+    }
+}
+
+void CPU_SetLogFile(CPU *cpu, FILE *logfile) { cpu->log = logfile; }
 
 /* PRIVATE FUNCTION DEFINITIONS */
 
@@ -375,7 +480,7 @@ void Branch(CPU *cpu, int takeBranch)
 
 void HandleInterrupt(CPU *cpu, InterruptType interrupt)
 {
-    FetchByte(cpu);
+    Read(cpu, cpu->state.pc);
 
     //BRK, IRQ and NMI push PC and P to the stack. But for reset, the stack pointer is decremented, but writes are suppressed.
     if (interrupt != IR_RESET) {
