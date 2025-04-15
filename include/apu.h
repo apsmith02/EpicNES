@@ -43,7 +43,7 @@ typedef struct {
     uint8_t sequencer; //Position in output waveform
 } APUPulse;
 
-typedef enum {
+typedef struct {
     uint8_t linear_counter;
     uint8_t linear_reload_value;
     bool control;
