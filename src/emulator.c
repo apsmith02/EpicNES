@@ -6,42 +6,52 @@
 
 /* PRIVATE FUNCTIONS */
 
+void TriggerDebugPause(Emulator* emu);
 
 void MapNTHorizontal(Emulator* emu) {
-    Mem_MapCHRPages(&emu->memory, MEM_VRAM, 0x000, 0x20, 0x23);
-    Mem_MapCHRPages(&emu->memory, MEM_VRAM, 0x000, 0x24, 0x27);
-    Mem_MapCHRPages(&emu->memory, MEM_VRAM, 0x400, 0x28, 0x2B);
-    Mem_MapCHRPages(&emu->memory, MEM_VRAM, 0x400, 0x2C, 0x2F);
+    Mem_PPUMapPages(&emu->memory, 0x20, 0x23, MEM_VRAM, 0x00);
+    Mem_PPUMapPages(&emu->memory, 0x24, 0x27, MEM_VRAM, 0x00);
+    Mem_PPUMapPages(&emu->memory, 0x28, 0x2B, MEM_VRAM, 0x04);
+    Mem_PPUMapPages(&emu->memory, 0x2C, 0x2F, MEM_VRAM, 0x04);
 }
 
 void MapNTVertical(Emulator* emu) {
-    Mem_MapCHRPages(&emu->memory, MEM_VRAM, 0x000, 0x20, 0x23);
-    Mem_MapCHRPages(&emu->memory, MEM_VRAM, 0x400, 0x24, 0x27);
-    Mem_MapCHRPages(&emu->memory, MEM_VRAM, 0x000, 0x28, 0x2B);
-    Mem_MapCHRPages(&emu->memory, MEM_VRAM, 0x400, 0x2C, 0x2F);
+    Mem_PPUMapPages(&emu->memory, 0x20, 0x23, MEM_VRAM, 0x00);
+    Mem_PPUMapPages(&emu->memory, 0x24, 0x27, MEM_VRAM, 0x04);
+    Mem_PPUMapPages(&emu->memory, 0x28, 0x2B, MEM_VRAM, 0x00);
+    Mem_PPUMapPages(&emu->memory, 0x2C, 0x2F, MEM_VRAM, 0x04);
 }
 
 uint8_t OnCPURead(void* emulator, uint16_t addr) {
     Emulator* emu = (Emulator*)emulator;
+    Memory* memory = &emu->memory;
 
-    //Debug: Break on step CPU cycle, break on read breakpoint
+    //Debug: Break on step or breakpoint hit, flag opcodes on opcode fetch
     if (emu->debug_enable) {
-        if (emu->debug_step == DEBUG_STEP_CPUCYCLE) {
+        if (emu->cpu.instr_cycle == 1) {
+            //Opcode fetch cycle: Flag memory as opcode
+            MemoryType memtype;
+            unsigned memaddr;
+            Mem_CPUToMemAddr(memory, addr, &memtype, &memaddr);
+            Mem_FlagOpcode(memory, memtype, memaddr);
+        }
+        //Break on...
+        if (emu->debug_step == DEBUG_STEP_CPUCYCLE ||                           //Step CPU cycle
+        (emu->cpu.instr_cycle == 1 && (emu->debug_step == DEBUG_STEP_INTO)) ||  //Step instruction
+        Mem_TestCPUBreakpoint(memory, addr, emu->cpu.access_type)               //Breakpoint hit
+        ) {
             TriggerDebugPause(emu);
         }
-        TestBreakpoint(emu, addr, DEBUG_BREAK_ON_R);
     }
-    
 
     bool iNmi = PPU_NMISignal(&emu->ppu);
-
-    uint8_t val = Mem_CPURead(&emu->memory, addr);
+    uint8_t val = Mem_CPURead(memory, addr);
 
     APU_CPUCycle(&emu->apu);
     PPU_Cycle(&emu->ppu);
     PPU_Cycle(&emu->ppu);
     PPU_Cycle(&emu->ppu);
-
+    
     if (iNmi && !PPU_NMISignal(&emu->ppu))
         CPU_NMI(&emu->cpu);
     return val;
@@ -49,10 +59,21 @@ uint8_t OnCPURead(void* emulator, uint16_t addr) {
 
 void OnCPUWrite(void* emulator, uint16_t addr, uint8_t data) {
     Emulator* emu = (Emulator*)emulator;
+    Memory* memory = &emu->memory;
+
+    //Debug: Break on step or breakpoint hit
+    if (emu->debug_enable) {
+        //Break on...
+        if (emu->debug_step == DEBUG_STEP_CPUCYCLE ||                           //Step CPU cycle
+        Mem_TestCPUBreakpoint(memory, addr, emu->cpu.access_type)               //Breakpoint hit
+        ) {
+            TriggerDebugPause(emu);
+        }
+    }
 
     bool iNmi = PPU_NMISignal(&emu->ppu);
-
-    Mem_CPUWrite(&emu->memory, addr, data);
+    
+    Mem_CPUWrite(memory, addr, data);
 
     APU_CPUCycle(&emu->apu);
     PPU_Cycle(&emu->ppu);
@@ -88,29 +109,6 @@ void TriggerDebugPause(Emulator* emu) {
     emu->debug_step = emu->debug_pause_callback(emu->debug_pause_userdata);
 }
 
-//Triggers a debug pause if the memory at addr has a breakpoint of access type break_on
-void TestBreakpoint(Emulator* emu, uint16_t addr, DebugBreakOn break_on) {
-    Memory* memory = &emu->memory;
-    uint8_t cpuDebugFlags = *Mem_CPUDebugFlagsAt(memory, addr);
-    uint8_t prgDebugFlags = *Mem_PRGDebugFlagsAt(memory, addr);
-
-    if (cpuDebugFlags & break_on)
-        TriggerDebugPause(emu);
-    if (prgDebugFlags & break_on)
-        TriggerDebugPause(emu);
-}
-
-void SetBPDebugFlags(Memory* memory, Breakpoint* bp) {
-    for(unsigned addr = bp->start; addr <= bp->end; addr++) {
-        *Mem_DebugFlagsAtType(memory, bp->type, addr) |= (bp->rwx & (DEBUG_BREAK_ON_MASK));
-    }
-}
-
-void ClearBPDebugFlags(Memory* memory, Breakpoint* bp) {
-    for (unsigned addr = bp->start; addr <= bp->end; addr++) {
-        *Mem_DebugFlagsAtPhysical(memory, bp->type, addr) &= ~(DEBUG_BREAK_ON_MASK);
-    }
-}
 
 
 /* FUNCTION DEFINITIONS */
@@ -172,44 +170,25 @@ Emulator *Emu_Create()
     Mem_Create_RAM(memory);
 
     //RAM: $0000-$07FF (with mirrors at $0800-$1FFF)
-    Mem_MapPRGPages(memory, MEM_RAM, 0x000, 0x00, 0x07);
-    Mem_MapPRGPages(memory, MEM_RAM, 0x000, 0x08, 0x0F);
-    Mem_MapPRGPages(memory, MEM_RAM, 0x000, 0x10, 0x17);
-    Mem_MapPRGPages(memory, MEM_RAM, 0x000, 0x18, 0x1F);
-    /*
-    MapPRGPages(emu, &emu->ram[0], 0x00, 0x07, true, DEBUG_MEMTYPE_RAM);
-    MapPRGPages(emu, &emu->ram[0], 0x08, 0x0F, true, DEBUG_MEMTYPE_RAM);
-    MapPRGPages(emu, &emu->ram[0], 0x10, 0x17, true, DEBUG_MEMTYPE_RAM);
-    MapPRGPages(emu, &emu->ram[0], 0x18, 0x1F, true, DEBUG_MEMTYPE_RAM);
-    */
+    Mem_CPUMapPages(memory, 0x00, 0x07, MEM_RAM, 0x00);
+    Mem_CPUMapPages(memory, 0x08, 0x0F, MEM_RAM, 0x00);
+    Mem_CPUMapPages(memory, 0x10, 0x17, MEM_RAM, 0x00);
+    Mem_CPUMapPages(memory, 0x18, 0x1F, MEM_RAM, 0x00);
 
     //PPU: $2000-$3FFF
-    Mem_MapCPUReadDevice(memory, &emu->ppu, (CPUReadFn)&PPU_RegRead, 0x2000, 0x3FFF);
-    Mem_MapCPUWriteDevice(memory, &emu->ppu, (CPUWriteFn)&PPU_RegWrite, 0x2000, 0x3FFF);
-    /*
-    MapCPUReadDevice(emu, &emu->ppu, (CPUReadFn)&PPU_RegRead, 0x2000, 0x3FFF);
-    MapCPUWriteDevice(emu, &emu->ppu, (CPUWriteFn)&PPU_RegWrite, 0x2000, 0x3FFF);
-    */
+    Mem_CPUMapDevice(memory, 0x2000, 0x3FFF, &emu->ppu, (CPUReadFn)&PPU_RegRead, (CPUWriteFn)&PPU_RegWrite);
 
     //APU
-    Mem_MapCPUReadDevice(memory, &emu->apu, (CPUReadFn)&APU_Read, 0x4015, 0x4015);
-    Mem_MapCPUWriteDevice(memory, &emu->apu, (CPUWriteFn)&APU_Write, 0x4000, 0x4013);
-    Mem_MapCPUWriteDevice(memory, &emu->apu, (CPUWriteFn)&APU_Write, 0x4015, 0x4015);
-    Mem_MapCPUWriteDevice(memory, &emu->apu, (CPUWriteFn)&APU_Write, 0x4017, 0x4017);
-    /*
-    MapCPUReadDevice(emu, &emu->apu, (CPUReadFn)&APU_Read, 0x4015, 0x4015);
-    MapCPUWriteDevice(emu, &emu->apu, (CPUWriteFn)&APU_Write, 0x4000, 0x4013);
-    MapCPUWriteDevice(emu, &emu->apu, (CPUWriteFn)&APU_Write, 0x4015, 0x4015);
-    MapCPUWriteDevice(emu, &emu->apu, (CPUWriteFn)&APU_Write, 0x4017, 0x4017);
-    */
+    Mem_CPUMapReadDevice(memory, 0x4015, 0x4015, &emu->apu, (CPUReadFn)&APU_Read);
+    Mem_CPUMapWriteDevice(memory, 0x4000, 0x4013, &emu->apu, (CPUWriteFn)&APU_Write);
+    Mem_CPUMapWriteDevice(memory, 0x4015, 0x4015, &emu->apu, (CPUWriteFn)&APU_Write);
+    Mem_CPUMapWriteDevice(memory, 0x4017, 0x4017, &emu->apu, (CPUWriteFn)&APU_Write);
 
     //Controller Strobe: Write $4016
-    Mem_MapCPUWriteDevice(memory, emu, (CPUWriteFn)&Write4016, 0x4016, 0x4016);
-    //MapCPUWriteDevice(emu, emu, (CPUWriteFn)&Write4016, 0x4016, 0x4016);
-
+    Mem_CPUMapWriteDevice(memory, 0x4016, 0x4016, emu, (CPUWriteFn)&Write4016);
+    
     //Controller output: Read $4016-$4017
-    Mem_MapCPUReadDevice(memory, &emu->controller, (CPUReadFn)&StdController_Read, 0x4016, 0x4016);
-    //MapCPUReadDevice(emu, &emu->controller, (CPUReadFn)&StdController_Read, 0x4016, 0x4016);
+    Mem_CPUMapReadDevice(memory, 0x4016, 0x4016, &emu->controller, (CPUReadFn)&StdController_Read);
 
     return emu;
 }
@@ -256,15 +235,11 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
         Mem_Create_VRAM(memory, 0x800);
 
         //Map PRG ROM
-        Mem_MapPRGPages(memory, MEM_PRG_ROM, 0, 0x80, 0xBF);
-        Mem_MapPRGPages(memory, MEM_PRG_ROM, 0x4000 % ines->prg_bytes, 0xC0, 0xFF);
-        /*
-        MapPRGPages(emu, &rom->prg_rom[0], 0x80, 0xBF, false, DEBUG_MEMTYPE_PRGROM);
-        MapPRGPages(emu, &rom->prg_rom[0x4000 % rom->prg_bytes], 0xC0, 0xFF, false, DEBUG_MEMTYPE_PRGROM);
-        */
+        Mem_CPUMapPages(memory, 0x80, 0xBF, MEM_PRG_ROM, 0);
+        Mem_CPUMapPages(memory, 0xC0, 0xFF, MEM_PRG_ROM, 0x40 % (ines->prg_bytes >> 8));
+
         //Map CHR ROM
-        Mem_MapCHRPages(memory, MEM_CHR_ROM, 0, 0x00, 0x1F);
-        //MapCHRPages(emu, rom->chr_rom, 0x00, 0x1F, false);
+        Mem_PPUMapPages(memory, 0x00, 0x1F, MEM_CHR_ROM, 0);
 
         //NT Mirroring
         if (ines->nt_mirroring == 0)
@@ -280,9 +255,7 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
     emu->is_rom_loaded = 1;
 
     //Power on system
-    PPU_PowerOn(&emu->ppu);
-    APU_PowerOn(&emu->apu);
-    CPU_PowerOn(&emu->cpu);
+    Emu_PowerOn(emu);
 
     return 0;
 }
@@ -297,27 +270,36 @@ int Emu_IsROMLoaded(Emulator *emu)
     return emu->is_rom_loaded;
 }
 
+void Emu_PowerOn(Emulator *emu)
+{
+    if (!emu->in_cpu_exec) {
+        PPU_PowerOn(&emu->ppu);
+        APU_PowerOn(&emu->apu);
+        CPU_PowerOn(&emu->cpu);
+
+        emu->power_on_queued = false;
+        if (emu->debug_enable && emu->debug_break_on_reset)
+            emu->debug_step = DEBUG_STEP_INTO;
+    } else {
+        emu->power_on_queued = true;
+    }
+}
+
 int Emu_RunFrame(Emulator *emu)
 {
     //Execute instructions until a full frame is rendered
     unsigned long long frame = emu->ppu.state.frames;
     while (emu->ppu.state.frames == frame) {
-        //Debug: Flag instruction byte as code, break on step into, break on x breakpoint
-        if (emu->debug_enable) {
-            Memory* memory = &emu->memory;
-            uint16_t pc = emu->cpu.state.pc;
+        emu->in_cpu_exec = true;
 
-            *Mem_PRGDebugFlagsAt(memory, pc) |= MEMDEBUG_IS_OPCODE;
-            if (emu->debug_step == DEBUG_STEP_INTO) {
-                TriggerDebugPause(emu);
-            }
-            TestBreakpoint(emu, pc, DEBUG_BREAK_ON_X);
-        }
-
-        //Execute CPU instruction
         if (CPU_Exec(&emu->cpu) != 0) {
             printf("Error: CPU crashed.\n");
             return -1;
+        }
+
+        emu->in_cpu_exec = false;
+        if (emu->power_on_queued) {
+            Emu_PowerOn(emu);
         }
     }
     return 0;
@@ -361,6 +343,16 @@ void Emu_SetDebugPauseCallback(Emulator *emu, DebugPauseCallback callback, void 
     emu->debug_pause_userdata = userdata;
 }
 
+void Emu_DebugSetBreakOnReset(Emulator *emu, bool enabled)
+{
+    emu->debug_break_on_reset = enabled;
+}
+
+bool Emu_DebugGetBreakOnReset(Emulator *emu)
+{
+    return emu->debug_break_on_reset;
+}
+
 void Emu_DebugPause(Emulator *emu)
 {
     emu->debug_step = DEBUG_STEP_INTO;
@@ -370,17 +362,13 @@ void Emu_DebugSetCodeBreakpoint(Emulator *emu, unsigned addr)
 {
     Memory* memory = &emu->memory;
 
-    uint8_t* debug_flags = Mem_PRGDebugFlagsAt(memory, addr);
-    if (debug_flags != NULL) {
-        *debug_flags |= DEBUG_BREAK_ON_X;
-        Breakpoint bp = {
-            .start = Mem_GetPRGMemPhysAddr(memory, addr),
-            .end = bp.start,
-            .type = Mem_GetPRGMemType(memory, addr),
-            .rwx = DEBUG_BREAK_ON_X
-        };
-        Vec_BP_Add(&emu->breakpoints, bp);
-    }
+    Breakpoint bp;
+    Mem_CPUToMemAddr(memory, addr, &bp.type, &bp.start);
+    bp.end = bp.start;
+    bp.rwx = MEMDEBUG_BREAK_X;
+
+    Mem_SetBreakFlags(memory, bp.type, bp.start, bp.end, bp.rwx);
+    Vec_BP_Add(&emu->breakpoints, bp);
 }
 
 void Emu_DebugSetBreakpoint(Emulator *emu, MemoryType type, int break_on_flags, unsigned addr)
@@ -396,7 +384,7 @@ void Emu_DebugSetBreakpointRange(Emulator *emu, MemoryType type, int break_on_fl
         .rwx = break_on_flags,
         .type = type
     };
-    SetBPDebugFlags(&emu->memory, &bp);
+    Mem_SetBreakFlags(&emu->memory, bp.type, bp.start, bp.end, bp.rwx);
     Vec_BP_Add(&emu->breakpoints, bp);
 }
 
@@ -407,11 +395,12 @@ void Emu_DebugDeleteBreakpoint(Emulator *emu, size_t index)
     Breakpoint* bp = Vec_BP_At(bplist, index);
 
     //Clear this breakpoint's debug flags, remove from list
-    ClearBPDebugFlags(memory, bp);
+    Mem_ClearBreakFlags(memory, bp->type, bp->start, bp->end);
     Vec_BP_Remove(bplist, index);
     //Reapply flags from other breakpoints in list
     for (size_t i = 0; i < bplist->size; i++) {
-        SetBPDebugFlags(memory, Vec_BP_At(bplist, i));
+        bp = Vec_BP_At(bplist, i);
+        Mem_SetBreakFlags(memory, bp->type, bp->start, bp->end, bp->rwx);
     }
 }
 
@@ -421,7 +410,8 @@ void Emu_DebugClearBreakpoints(Emulator *emu)
     Vec_Breakpoint* bplist = &emu->breakpoints;
     
     for (size_t i = 0; i < bplist->size; i++) {
-        ClearBPDebugFlags(memory, Vec_BP_At(bplist, i));
+        Breakpoint* bp = Vec_BP_At(bplist, i);
+        Mem_ClearBreakFlags(memory, bp->type, bp->start, bp->end);
     }
     Vec_BP_Clear(bplist);
 }
@@ -438,8 +428,7 @@ Breakpoint Emu_DebugGetBreakpoint(Emulator *emu, size_t index)
 
 bool Emu_DebugAddrHasCodeBreakpoint(Emulator *emu, uint16_t addr)
 {
-    uint8_t* debug_flags = Mem_PRGDebugFlagsAt(&emu->memory, addr);
-    return (debug_flags != NULL && (*debug_flags & MEMDEBUG_BREAK_X) > 0);
+    return (Mem_TestCPUDebugFlags(&emu->memory, addr) & MEMDEBUG_BREAK_X) > 0;
 }
 
 int Emu_DebugDisassemble(Emulator *emu, uint16_t address, char *buffer, size_t n)
@@ -450,43 +439,47 @@ int Emu_DebugDisassemble(Emulator *emu, uint16_t address, char *buffer, size_t n
 int Emu_DebugIterLastInstruction(Emulator *emu, uint16_t *address)
 {
     Memory* memory = &emu->memory;
-    int addr = *address;
-    uint8_t* debug_flags;
     
-    do {
-        addr--;
-    } while (addr >= 0 && ((debug_flags = Mem_PRGDebugFlagsAt(memory, addr)) == NULL || (*debug_flags & MEMDEBUG_IS_OPCODE) == 0));
-
-    if (addr <= -1)
-        return -1;
-    *address = addr;
-    return 0;
+    for (int addr = *address - 1; addr >= 0; addr--) {
+        if (Mem_CPUHasOpcode(memory, addr)) {
+            *address = addr;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 int Emu_DebugIterNextInstruction(Emulator *emu, uint16_t *address)
 {
     Memory* memory = &emu->memory;
-    int addr = *address;
-    uint8_t* debug_flags;
-
-    do {
-        addr++;
-    } while (addr < CPU_ADDR_SPACE && ((debug_flags = Mem_PRGDebugFlagsAt(memory, addr)) == NULL || (*debug_flags & MEMDEBUG_IS_OPCODE) == 0));
-
-    if (addr >= CPU_ADDR_SPACE)
-        return -1;
-    *address = addr;
-    return 0;
+    
+    for (int addr = *address + 1; addr < CPU_ADDR_SPACE; addr++) {
+        if (Mem_CPUHasOpcode(memory, addr)) {
+            *address = addr;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 bool Emu_DebugIsOpcode(Emulator *emu, uint16_t address)
 {
-    Memory* memory = &emu->memory;
-    uint8_t* debug_flags = Mem_PRGDebugFlagsAt(memory, address);
-    return debug_flags != NULL && (*debug_flags & MEMDEBUG_IS_OPCODE) > 0;
+    return Mem_CPUHasOpcode(&emu->memory, address);
 }
 
 int Emu_DebugIterPRGMirrors(Emulator* emu, MemoryType type, int physical_addr, int *cpu_addr)
 {
-    return Mem_IterPRGMirrors(&emu->memory, type, physical_addr, cpu_addr);
+    if (*cpu_addr == -1) {
+        uint16_t addr;
+        int ret = Mem_BeginMemToCPUAddr(&emu->memory, type, physical_addr, &addr);
+        if (ret == 0) {
+            *cpu_addr = addr;
+        }
+        return ret;
+    }
+
+    uint16_t addr = *cpu_addr;
+    int ret = Mem_IterMemToCPUAddr(&emu->memory, type, physical_addr, &addr);
+    *cpu_addr = addr;
+    return ret;
 }

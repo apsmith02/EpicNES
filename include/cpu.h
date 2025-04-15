@@ -7,13 +7,13 @@
 
 //Opcode names for disassembly
 static const char* OPCODE_NAMES[256] = {
-    "BRK","ORA",NULL,NULL, NULL,"ORA","ASL",NULL, "PHP","ORA","ASLA",NULL,NULL,"ORA","ASL",NULL,
+    "BRK","ORA",NULL,NULL, NULL,"ORA","ASL",NULL, "PHP","ORA","ASL",NULL,NULL,"ORA","ASL",NULL,
     "BPL","ORA",NULL,NULL, NULL,"ORA","ASL",NULL, "CLC","ORA",NULL,NULL, NULL,"ORA","ASL",NULL,
-    "JSR","AND",NULL,NULL, "BIT","AND","ROL",NULL, "PLP","AND","ROLA",NULL,"BIT","AND","ROL",NULL,
+    "JSR","AND",NULL,NULL, "BIT","AND","ROL",NULL, "PLP","AND","ROL",NULL,"BIT","AND","ROL",NULL,
     "BMI","AND",NULL,NULL, NULL,"AND","ROL",NULL, "SEC","AND",NULL,NULL, NULL,"AND","ROL",NULL,
-    "RTI","EOR",NULL,NULL, NULL,"EOR","LSR",NULL, "PHA","EOR","LSRA",NULL,"JMP","EOR","LSR",NULL,
+    "RTI","EOR",NULL,NULL, NULL,"EOR","LSR",NULL, "PHA","EOR","LSR",NULL,"JMP","EOR","LSR",NULL,
     "BVC","EOR",NULL,NULL, NULL,"EOR","LSR",NULL, "CLI","EOR",NULL,NULL, NULL,"EOR","LSR",NULL,
-    "RTS","ADC",NULL,NULL, NULL,"ADC","ROR",NULL, "PLA","ADC","RORA",NULL,"JMP","ADC","ROR",NULL,
+    "RTS","ADC",NULL,NULL, NULL,"ADC","ROR",NULL, "PLA","ADC","ROR",NULL,"JMP","ADC","ROR",NULL,
     "BVS","ADC",NULL,NULL, NULL,"ADC","ROR",NULL, "SEI","ADC",NULL,NULL, NULL,"ADC","ROR",NULL,
     NULL,"STA",NULL,NULL, "STY","STA","STX",NULL, "DEY",NULL,"TXA",NULL, "STY","STA","STX",NULL,
     "BCC","STA",NULL,NULL, "STY","STA","STX",NULL, "TYA","STA","TXS",NULL, NULL,"STA",NULL,NULL,
@@ -25,15 +25,31 @@ static const char* OPCODE_NAMES[256] = {
     "BEQ","SBC",NULL,NULL, NULL,"SBC","INC",NULL, "SED","SBC",NULL,NULL, NULL,"SBC","INC",NULL
 };
 
-//Memory access type bit flags
+
+/*Memory access type bit flags for debug. Each CPU cycle, the CPU sets its access_type member to
+* the type of memory access it is doing that cycle. The RWX flags can be ANDed with a breakpoint's
+* access flags to determine if the CPU access type matches the access type a breakpoint is set
+* to break on.
+*
+* The ACCESS_DUMMY flag is used to indicate a dummy read/write. This flag can be used in a breakpoint's
+* access flags to include or exclude dummy reads/writes in the breakpoint condition,
+* i.e. only break if the CPU's ACCESS_DUMMY flag is clear or the breakpoint's ACCESS_DUMMY flag is set.
+*/
 typedef enum {
     ACCESS_READ         = 1,
     ACCESS_WRITE        = 1 << 1,
     ACCESS_EXECUTE      = 1 << 2,
-    ACCESS_DUMMY        = 1 << 3,
+    ACCESS_MASK_RWX     = ACCESS_READ | ACCESS_WRITE | ACCESS_EXECUTE,
 
+    ACCESS_DUMMY        = 1 << 3,
     ACCESS_DUMMY_READ   = ACCESS_DUMMY | ACCESS_READ,
-    ACCESS_DUMMY_WRITE  = ACCESS_DUMMY | ACCESS_WRITE
+    ACCESS_DUMMY_WRITE  = ACCESS_DUMMY | ACCESS_WRITE,
+
+    ACCESS_MASK         = ACCESS_READ | ACCESS_WRITE | ACCESS_EXECUTE | ACCESS_DUMMY,
+    /*The bit to the left of the most significant AccessType bit. Use this to determine where to add
+    * additional bit flags to store with the AccessType flags in a debug flag storage scheme.
+    */
+    ACCESS_FLAGS_END
 } AccessType;
 
 
@@ -85,7 +101,10 @@ typedef struct {
     //Log file
     FILE* log;
 
-    //
+    //Debug info
+    uint16_t instr_addr; //Address of current instruction being executed
+    int instr_cycle; //Cycle in current instruction being executed (starting from 1)
+    AccessType access_type; //Access type of current cycle
 } CPU;
 
 

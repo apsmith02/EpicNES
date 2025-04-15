@@ -15,20 +15,44 @@ typedef enum {
 
 /* PRIVATE FUNCTIONS */
 
-static uint8_t Read(CPU* cpu, uint16_t addr) {
+static uint8_t _Read(CPU* cpu, uint16_t addr, AccessType access) {
+    cpu->instr_cycle++;
+    cpu->access_type = access;
+
     cpu->state.cycles++;
+
     return cpu->readfn(cpu->fndata, addr);
 }
 
-static void Write(CPU* cpu, uint16_t addr, uint8_t data) {
+static void _Write(CPU* cpu, uint16_t addr, uint8_t data, AccessType access) {
+    cpu->instr_cycle++;
+    cpu->access_type = access;
+
     cpu->state.cycles++;
-    if (addr != 0x4014) {
-        cpu->writefn(cpu->fndata, addr, data);
-    } else {
+
+    cpu->writefn(cpu->fndata, addr, data);
+
+    if (addr == 0x4014) {
         //$4014: OAMDMA
         cpu->oamdma = true;
         cpu->oamdma_page = data;
     }
+}
+
+static uint8_t Read(CPU* cpu, uint16_t addr) {
+    return _Read(cpu, addr, ACCESS_READ);
+}
+
+static void Write(CPU* cpu, uint16_t addr, uint8_t data) {
+    return _Write(cpu, addr, data, ACCESS_WRITE);
+}
+
+static uint8_t DummyRead(CPU* cpu, uint16_t addr) {
+    return _Read(cpu, addr, ACCESS_DUMMY_READ);
+}
+
+static void DummyWrite(CPU* cpu, uint16_t addr, uint8_t data) {
+    return _Write(cpu, addr, data, ACCESS_DUMMY_WRITE);
 }
 
 static uint8_t Peek(CPU* cpu, uint16_t addr) {
@@ -41,8 +65,23 @@ static uint16_t ReadWord(CPU* cpu, uint16_t addr) {
     return Read(cpu, addr) | Read(cpu, ((addr + 1) & 0xFF) | (addr & 0xFF00)) << 8;
 }
 
+//Fetch opcode, increment pc. Use to fetch with execute access type.
+static uint8_t FetchOpcode(CPU* cpu) {
+    uint8_t val = _Read(cpu, cpu->state.pc, ACCESS_EXECUTE);
+    cpu->state.pc++;
+    return val;
+}
+
 static uint8_t FetchByte(CPU* cpu) {
-    return Read(cpu, cpu->state.pc++);
+    uint8_t val = Read(cpu, cpu->state.pc);
+    cpu->state.pc++;
+    return val;
+}
+
+static uint8_t DummyFetchByte(CPU* cpu) {
+    uint8_t val = Read(cpu, cpu->state.pc);
+    cpu->state.pc++;
+    return val;
 }
 
 static uint16_t FetchWord(CPU* cpu) {
@@ -57,6 +96,10 @@ static uint8_t ReadStack(CPU* cpu) {
     return Read(cpu, StackAddr(cpu));
 }
 
+static uint8_t DummyReadStack(CPU* cpu) {
+    return DummyRead(cpu, StackAddr(cpu));
+}
+
 static void Push(CPU* cpu, uint8_t val) {
     Write(cpu, StackAddr(cpu), val);
     cpu->state.s--;
@@ -68,7 +111,7 @@ static uint8_t Pop(CPU* cpu) {
 }
 
 static void DummyPush(CPU* cpu) {
-    Read(cpu, StackAddr(cpu));
+    DummyRead(cpu, StackAddr(cpu));
     cpu->state.s--;
 }
 
@@ -95,7 +138,7 @@ static uint8_t ReadByMode(CPU* cpu, AddrMode mode) {
 static uint8_t RMWReadByMode(CPU* cpu, AddrMode mode, uint16_t* outAddr) {
     *outAddr = FetchAddr(cpu, mode, 1);
     uint8_t val = Read(cpu, *outAddr);
-    Write(cpu, *outAddr, val);
+    DummyWrite(cpu, *outAddr, val);
     return val;
 }
 static void WriteByMode(CPU* cpu, AddrMode mode, uint8_t val) {
@@ -106,7 +149,7 @@ static void WriteByMode(CPU* cpu, AddrMode mode, uint8_t val) {
 static uint16_t AddrAddIndex(CPU* cpu, uint16_t base, uint8_t index, int forWrite) {
     uint16_t addr = base + index;
     if (forWrite || (addr & 0xFF00) != (base & 0xFF00))
-        Read(cpu, addr - ((addr & 0xFF00) - (base & 0xFF00)));
+        DummyRead(cpu, addr - ((addr & 0xFF00) - (base & 0xFF00)));
     return addr;
 }
 
@@ -253,7 +296,7 @@ void CPU_PowerOn(CPU *cpu)
 
 void CPU_SoftReset(CPU *cpu)
 {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     HandleInterrupt(cpu, IR_RESET);
 }
 
@@ -261,8 +304,11 @@ int CPU_Exec(CPU *cpu)
 {
     CPUState* state = &cpu->state;
 
+    cpu->instr_addr = state->pc;
+    cpu->instr_cycle = 0;
+    
     //Fetch opcode
-    uint8_t opcode = FetchByte(cpu);
+    uint8_t opcode = FetchOpcode(cpu);
     OpcodeFn opcodeFn = OPCODE_TABLE[opcode];
 
     //Log opcode
@@ -277,7 +323,7 @@ int CPU_Exec(CPU *cpu)
         fprintf(cpu->log, " A:%02x X:%02x Y:%02x S:%02x P:%02x CYC:%llu\n", state->a, state->x, state->y, state->s, state->p, state->cycles);
     }
 
-    //Some opcodes crash the CPU (or at this stage of development, aren't implemented yet). Return error if any of these opcodes are fetched.
+    //Some illegal opcodes crash the CPU (or at this stage of development, aren't implemented yet). Return error if any of these opcodes are fetched.
     if (opcodeFn == NULL)
         return -1;
 
@@ -286,9 +332,9 @@ int CPU_Exec(CPU *cpu)
 
     //Begin OAM DMA
     if (cpu->oamdma) {
-        Read(cpu, state->pc); //Halt cycle
+        DummyRead(cpu, state->pc); //Halt cycle
         if (state->cycles % 2 == 1) {
-            Read(cpu, state->pc); //Odd cycles: Alignment cycle
+            DummyRead(cpu, state->pc); //Odd cycles: Alignment cycle
         }
 
         uint16_t addr = (uint16_t)cpu->oamdma_page << 8;
@@ -304,11 +350,12 @@ int CPU_Exec(CPU *cpu)
     if (state->nmi) {
         if (cpu->log)
             fprintf(cpu->log, "NMI\n");
-        Read(cpu, state->pc);
+        DummyRead(cpu, state->pc);
         HandleInterrupt(cpu, IR_NMI);
         state->nmi = 0;
     }
     
+    cpu->instr_cycle = 0;
     return 0;
 }
 
@@ -377,12 +424,12 @@ uint16_t FetchAddr(CPU *cpu, AddrMode mode, int forWrite)
         case AD_ZPG: return FetchByte(cpu);
         case AD_ZPX: {
             uint8_t addr = FetchByte(cpu);
-            Read(cpu, addr);
+            DummyRead(cpu, addr);
             return addr + cpu->state.x & 0xFF;
         }
         case AD_ZPY: {
             uint8_t addr = FetchByte(cpu);
-            Read(cpu, addr);
+            DummyRead(cpu, addr);
             return addr + cpu->state.y & 0xFF;
         }
         case AD_ABS: return FetchWord(cpu);
@@ -391,7 +438,7 @@ uint16_t FetchAddr(CPU *cpu, AddrMode mode, int forWrite)
         case AD_IND: return ReadWord(cpu, FetchWord(cpu));
         case AD_IDX: {
             uint8_t ptr = FetchByte(cpu);
-            Read(cpu, ptr);
+            DummyRead(cpu, ptr);
             return ReadWord(cpu, ptr + cpu->state.x & 0xFF);
         }
         case AD_IDY: return AddrAddIndex(cpu, ReadWord(cpu, FetchByte(cpu)), cpu->state.y, forWrite);
@@ -468,11 +515,11 @@ void Branch(CPU *cpu, int takeBranch)
 {
     int8_t disp = FetchByte(cpu);
     if (takeBranch) {
-       Read(cpu, cpu->state.pc);
+       DummyRead(cpu, cpu->state.pc);
        uint16_t branch = cpu->state.pc + disp;
        uint16_t pchDiff = (branch & 0xFF00) - (cpu->state.pc & 0xFF00);
        if (pchDiff != 0) {
-            Read(cpu, branch - pchDiff);
+            DummyRead(cpu, branch - pchDiff);
        }
        cpu->state.pc = branch;
     }
@@ -480,7 +527,7 @@ void Branch(CPU *cpu, int takeBranch)
 
 void HandleInterrupt(CPU *cpu, InterruptType interrupt)
 {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
 
     //BRK, IRQ and NMI push PC and P to the stack. But for reset, the stack pointer is decremented, but writes are suppressed.
     if (interrupt != IR_RESET) {
@@ -521,7 +568,7 @@ void ASL(CPU* cpu, AddrMode mode) {
 }
 
 void ASLA(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.a = OpASL(cpu, cpu->state.a);
 }
 
@@ -569,22 +616,22 @@ void BVS(CPU* cpu, AddrMode mode) {
 }
 
 void CLC(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.p &= ~CPU_FLAG_C;
 }
 
 void CLD(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.p &= ~CPU_FLAG_D;
 }
 
 void CLI(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.p &= ~CPU_FLAG_I;
 }
 
 void CLV(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.p &= ~CPU_FLAG_V;
 }
 
@@ -608,12 +655,12 @@ void DEC(CPU* cpu, AddrMode mode) {
 }
 
 void DEX(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     UpdateNZ(cpu, --cpu->state.x);
 }
 
 void DEY(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     UpdateNZ(cpu, --cpu->state.y);
 }
 
@@ -630,12 +677,12 @@ void INC(CPU* cpu, AddrMode mode) {
 }
 
 void INX(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     UpdateNZ(cpu, ++cpu->state.x);
 }
 
 void INY(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     UpdateNZ(cpu, ++cpu->state.y);
 }
 
@@ -645,7 +692,7 @@ void JMP(CPU *cpu, AddrMode mode) {
 
 void JSR(CPU *cpu, AddrMode mode) {
     uint16_t addr = FetchByte(cpu);
-    ReadStack(cpu);
+    DummyReadStack(cpu);
     PushPC(cpu);
     cpu->state.pc = addr | FetchByte(cpu) << 8;
 }
@@ -672,12 +719,12 @@ void LSR(CPU* cpu, AddrMode mode) {
 }
 
 void LSRA(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.a = OpLSR(cpu, cpu->state.a);
 }
 
 void NOP(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
 }
 
 void ORA(CPU* cpu, AddrMode mode) {
@@ -686,25 +733,25 @@ void ORA(CPU* cpu, AddrMode mode) {
 }
 
 void PHA(CPU *cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     Push(cpu, cpu->state.a);
 }
 
 void PHP(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     Push(cpu, cpu->state.p | CPU_FLAG_B);
 }
 
 void PLA(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
-    ReadStack(cpu);
+    DummyRead(cpu, cpu->state.pc);
+    DummyReadStack(cpu);
     cpu->state.a = Pop(cpu);
     UpdateNZ(cpu, cpu->state.a);
 }
 
 void PLP(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
-    ReadStack(cpu);
+    DummyRead(cpu, cpu->state.pc);
+    DummyReadStack(cpu);
     PopP(cpu);
 }
 
@@ -715,7 +762,7 @@ void ROL(CPU *cpu, AddrMode mode) {
 }
 
 void ROLA(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.a = OpROL(cpu, cpu->state.a);
 }
 
@@ -726,24 +773,24 @@ void ROR(CPU *cpu, AddrMode mode) {
 }
 
 void RORA(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.a = OpROR(cpu, cpu->state.a);
 }
 
 void RTI(CPU *cpu, AddrMode mode)
 {
-    Read(cpu, cpu->state.pc);
-    ReadStack(cpu);
+    DummyRead(cpu, cpu->state.pc);
+    DummyReadStack(cpu);
     PopP(cpu);
     PopPC(cpu);
 }
 
 void RTS(CPU *cpu, AddrMode mode)
 {
-    Read(cpu, cpu->state.pc);
-    ReadStack(cpu);
+    DummyRead(cpu, cpu->state.pc);
+    DummyReadStack(cpu);
     PopPC(cpu);
-    FetchByte(cpu);
+    DummyFetchByte(cpu);
 }
 
 void SBC(CPU* cpu, AddrMode mode) {
@@ -751,17 +798,17 @@ void SBC(CPU* cpu, AddrMode mode) {
 }
 
 void SEC(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.p |= CPU_FLAG_C;
 }
 
 void SED(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.p |= CPU_FLAG_D;
 }
 
 void SEI(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.p |= CPU_FLAG_I;
 }
 
@@ -778,28 +825,28 @@ void STY(CPU* cpu, AddrMode mode) {
 }
 
 void TAX(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     UpdateNZ(cpu, cpu->state.x = cpu->state.a);
 }
 
 void TAY(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     UpdateNZ(cpu, cpu->state.y = cpu->state.a);
 }
 
 void TSX(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     UpdateNZ(cpu, cpu->state.x = cpu->state.s);
 }
 void TXA(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     UpdateNZ(cpu, cpu->state.a = cpu->state.x);
 }
 void TXS(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     cpu->state.s = cpu->state.x;
 }
 void TYA(CPU* cpu, AddrMode mode) {
-    Read(cpu, cpu->state.pc);
+    DummyRead(cpu, cpu->state.pc);
     UpdateNZ(cpu, cpu->state.a = cpu->state.y);
 }

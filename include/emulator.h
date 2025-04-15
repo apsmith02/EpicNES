@@ -41,21 +41,11 @@ typedef enum {
 
 typedef DebugStepType(*DebugPauseCallback)(void*);
 
-//Bit flags for the type of memory access to trigger a breakpoint: Read, write, or execute (r/w/x).
-typedef enum {
-    DEBUG_BREAK_ON_R       = MEMDEBUG_BREAK_R,
-    DEBUG_BREAK_ON_W       = MEMDEBUG_BREAK_W,
-    DEBUG_BREAK_ON_X       = MEMDEBUG_BREAK_X,
-    DEBUG_BREAK_ON_MASK = DEBUG_BREAK_ON_R | DEBUG_BREAK_ON_W | DEBUG_BREAK_ON_X //All DebugBreakOn bit flags OR'd together
-} DebugBreakOn;
 
 typedef struct {
     INESHeader rom_ines;
     //ROM rom;
     int is_rom_loaded;
-
-    uint8_t ram[0x800];
-    uint8_t vram[0x1000];
 
     CPU cpu;
     PPU ppu;
@@ -64,30 +54,19 @@ typedef struct {
 
     Memory memory;
 
-    /*
-    CPUReadFn cpu_read_handler_fns[0x10000];
-    void* cpu_read_handlers[0x10000];
-    CPUWriteFn cpu_write_handler_fns[0x10000];
-    void* cpu_write_handlers[0x10000];
-
-    uint8_t* prg_pages[0x100];
-    bool prg_page_isRam[0x100];
-    uint8_t* chr_pages[0x100];
-    bool chr_page_isRam[0x100];
-    */
+    bool power_on_queued;
 
     // Debugging
 
     bool debug_enable;
+    bool in_cpu_exec;
+    bool debug_break_on_reset;
 
     DebugPauseCallback debug_pause_callback;
     void* debug_pause_userdata; //User data pointer passed to debug_pause_callback()
     DebugStepType debug_step;
 
     Vec_Breakpoint breakpoints;
-    uint16_t debug_instr; //Current instruction
-    int debug_instr_cycle; //Cycle # in current instruction
-    DebugBreakOn debug_access; //Memory access type in current CPU cycle
 } Emulator;
 
 Emulator* Emu_Create();
@@ -95,7 +74,7 @@ Emulator* Emu_Create();
 void Emu_Free(Emulator* emu);
 
 /**
-* Load a ROM from a file.
+* Load a ROM from a file and power on the console.
 *
 * @return 0 on success, -1 on error.
 */
@@ -104,6 +83,11 @@ int Emu_LoadROM(Emulator* emu, const char* filename);
 void Emu_CloseROM(Emulator* emu);
 
 int Emu_IsROMLoaded(Emulator* emu);
+
+/**
+ * Power on the console.
+*/
+void Emu_PowerOn(Emulator* emu);
 
 /**
 * Run one frame.
@@ -137,6 +121,16 @@ void Emu_DebugEnable(Emulator* emu, bool enabled);
  * an instruction, CPU cycle, etc and then pause again.
 */
 void Emu_SetDebugPauseCallback(Emulator* emu, DebugPauseCallback callback, void* userdata);
+
+/**
+ * @param enabled If true, the debugger will break on reset.
+*/
+void Emu_DebugSetBreakOnReset(Emulator* emu, bool enabled);
+
+/**
+ * @return True if debugger break on reset is enabled.
+*/
+bool Emu_DebugGetBreakOnReset(Emulator* emu);
 
 /**
  * Pause for debugging before executing the next instruction.

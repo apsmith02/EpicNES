@@ -1,6 +1,7 @@
 #ifndef RING_BUFFER_H
 #define RING_BUFFER_C
 #include <stdint.h>
+#include <stddef.h>
 
 typedef struct {
     void* buffer;

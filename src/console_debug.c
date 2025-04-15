@@ -11,7 +11,7 @@ DebugStepType ConsoleDebugCallback(void *emulator)
 {
     Emulator* emu = (Emulator*)emulator;
 
-    PrintDisassembly(emu, emu->cpu.state.pc, 4, 4);
+    PrintDisassembly(emu, emu->cpu.instr_addr, 4, 4);
     printf("\nCPU:\n");
     PrintCPURegisters(emu);
 
@@ -49,22 +49,28 @@ DebugStepType ConsoleDebugCallback(void *emulator)
             printf("b $<instrAddr> - Set instruction breakpoint\n");
             printf("b -rwx {cpu|ppu|ram|vram|prgrom|chrrom} $<startAddr> $<endAddr> - Set read/write/execute breakpoint in address range\n");
             printf("blist - List breakpoints\n");
+            printf("brst {on|off} - Enable/disable break on reset\n");
             printf("c - Continue\n");
             printf("cpu - Print CPU registers\n");
             printf("d <listNumber> - Delete breakpoint list entry listNumber\n");
-            printf("dc - Clear breakpoint list\n");
+            printf("d clear - Clear breakpoint list\n");
             printf("dsm [pc | $<addr>] [<linesBefore=4>] [<linesAfter=4>] - Print disassembly\n");
             printf("ppu - Print PPU registers\n");
+            printf("pwr - Power cycle console\n");
+            printf("sc - Step CPU cycle\n");
             printf("si - Step instruction\n");
         }
         else if (!strcmp(args[0], "apu"))       PrintAPU(emu);
         else if (!strcmp(args[0], "b"))         Cmd_b(emu, argc, args);
         else if (!strcmp(args[0], "blist"))     PrintBreakpointList(emu);
+        else if (!strcmp(args[0], "brst"))      Cmd_brst(emu, argc, args);
         else if (!strcmp(args[0], "c"))         return DEBUG_STEP_NONE;
         else if (!strcmp(args[0], "cpu"))       PrintCPURegisters(emu);
         else if (!strcmp(args[0], "d"))         Cmd_d(emu, argc, args);
         else if (!strcmp(args[0], "dsm"))       Cmd_dsm(emu, argc, args);
         else if (!strcmp(args[0], "ppu"))       PrintPPURegisters(emu);
+        else if (!strcmp(args[0], "pwr")) {     Emu_PowerOn(emu); return DEBUG_STEP_NONE; }
+        else if (!strcmp(args[0], "sc"))        return DEBUG_STEP_CPUCYCLE;
         else if (!strcmp(args[0], "si"))        return DEBUG_STEP_INTO;
         else {
             printf("Invalid command. Type 'help' for a command list.\n");
@@ -89,11 +95,24 @@ void PrintDisassembly(Emulator *emu, uint16_t addr, int linesBefore, int linesAf
     printf("  |ADDR |\tOPC|OP1|OP2|\tINST|OPERAND\n");
     for (int i = 0; i < linesBefore + 1 + linesAfter; i++) {
         Emu_DebugDisassemble(emu, addr, asm_buffer, sizeof(asm_buffer));
-        printf("%c%c %s\n", 
-            (addr == emu->cpu.state.pc) ? '>' : ' ',                 //Display an arrow pointing to current instruction
+        printf("%c%c %s", 
+            (addr == emu->cpu.instr_addr) ? '>' : ' ',                 //Display an arrow pointing to current instruction
             (Emu_DebugAddrHasCodeBreakpoint(emu, addr) ? '*' : ' '), //Display an asterisk next to instructions with a code breakpoint
             asm_buffer
         );
+        if (addr == emu->cpu.instr_addr) {
+            //Display cycle number and access type next to current instruction
+            printf("  %d ", emu->cpu.instr_cycle);
+            switch (emu->cpu.access_type) {
+               case ACCESS_READ: printf("R"); break;
+                case ACCESS_WRITE: printf("W"); break;
+                case ACCESS_EXECUTE: printf("X"); break;
+                case ACCESS_DUMMY_READ: printf("DR"); break;
+                case ACCESS_DUMMY_WRITE: printf("DW"); break;
+                default: break;
+            }
+        }
+        printf("\n");
 
         if (Emu_DebugIterNextInstruction(emu, &addr) == -1)
             break;
@@ -117,9 +136,9 @@ void PrintBreakpointList(Emulator *emu)
 
         printf("%u \t%c%c%c \t%-8s \t",
             (unsigned)i+1,
-            (bp.rwx & DEBUG_BREAK_ON_R) ? 'r' : '-',
-            (bp.rwx & DEBUG_BREAK_ON_W) ? 'w' : '-',
-            (bp.rwx & DEBUG_BREAK_ON_X) ? 'x' : '-',
+            (bp.rwx & MEMDEBUG_BREAK_R) ? 'r' : '-',
+            (bp.rwx & MEMDEBUG_BREAK_W) ? 'w' : '-',
+            (bp.rwx & MEMDEBUG_BREAK_X) ? 'x' : '-',
             typeStr
         );
         if (bp.start == bp.end) {
@@ -179,7 +198,7 @@ void PrintAPU(Emulator* emu) {
     printf("Frame Counter -  5-step: [%c]  IRQ inhibit: [%c]  FC Cycle Counter: %.1f APU cycles\n",
         (state->fc_ctrl & FC_5STEP) ? 'X' : ' ',
         (state->fc_ctrl & FC_IRQ_INHIBIT) ? 'X' : ' ',
-        (float)(state->fc_cycle_count / 2.0)
+        (float)(state->fc_cycles / 2.0)
     );
     printf("Channel Status -  DMC: [%c]  Noise: [%c]  Triangle: [%c]  Pulse 2: [%c]  Pulse 1: [%c]\n",
         (state->status & APU_STATUS_D) ? 'X' : ' ',
@@ -230,9 +249,9 @@ void Cmd_b(Emulator *emu, int argc, char *args[])
         bp.rwx = 0;
         for (int i = 1; args[1][i] != '\0'; i++) {
             switch (args[1][i]) {
-                case 'r': bp.rwx |= DEBUG_BREAK_ON_R; break;
-                case 'w': bp.rwx |= DEBUG_BREAK_ON_W; break;
-                case 'x': bp.rwx |= DEBUG_BREAK_ON_X; break;
+                case 'r': bp.rwx |= MEMDEBUG_BREAK_R; break;
+                case 'w': bp.rwx |= MEMDEBUG_BREAK_W; break;
+                case 'x': bp.rwx |= MEMDEBUG_BREAK_X; break;
                 default: break;
             }
         }
@@ -257,6 +276,23 @@ void Cmd_b(Emulator *emu, int argc, char *args[])
     printf(" b -rwx {cpu|ppu|ram|vram|prgrom|chrrom} $<startAddr> $<endAddr>\n");
 }
 
+void Cmd_brst(Emulator *emu, int argc, char *args[])
+{
+    if (argc >= 2) {
+        if (!strcmp(args[1], "on")) {
+            Emu_DebugSetBreakOnReset(emu, true);
+            return;
+        }
+        if (!strcmp(args[1], "off")) {
+            Emu_DebugSetBreakOnReset(emu, false);
+            return;
+        }
+    }
+
+    printf("Usage:\n");
+    printf("brst {on|off}");
+}
+
 void Cmd_d(Emulator *emu, int argc, char *args[])
 {
     if (argc == 2) {
@@ -264,7 +300,7 @@ void Cmd_d(Emulator *emu, int argc, char *args[])
             Emu_DebugClearBreakpoints(emu);
             return;
         } else {
-            size_t i = atoi(args[1], NULL, 10) - 1;
+            size_t i = atoi(args[1]) - 1;
             if (i < Emu_DebugGetBreakpointCount(emu)) {
                 Emu_DebugDeleteBreakpoint(emu, i);
             } else {
@@ -280,7 +316,7 @@ void Cmd_d(Emulator *emu, int argc, char *args[])
 
 void Cmd_dsm(Emulator *emu, int argc, char *args[])
 {
-    uint16_t addr = emu->cpu.state.pc;
+    uint16_t addr = emu->cpu.instr_addr;
     int linesBefore = 4;
     int linesAfter = 4;
 

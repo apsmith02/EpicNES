@@ -25,6 +25,13 @@ void PrintBreakpointList(Emulator* emu);
 void Cmd_b(Emulator* emu, int argc, char* args[]);
 
 /**
+ * Break on reset
+ * Usage:
+ * - brst {on|off}
+*/
+void Cmd_brst(Emulator* emu, int argc, char* args[]);
+
+/**
  * Breakpoint delete
  * Usage:
  * - d <listNumber>

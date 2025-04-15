@@ -35,5 +35,6 @@ void SDLAudioBuffer_QueueAudio(SDLAudioBuffer *buffer, Uint8 *src, size_t* len)
 
 void _SDLAudioBufferCallback(void *userdata, Uint8 *stream, int len)
 {
-    RingBuffer_Consume(&((SDLAudioBuffer*)userdata)->buffer, stream, &len);
+    size_t l = len;
+    RingBuffer_Consume(&((SDLAudioBuffer*)userdata)->buffer, stream, &l);
 }
