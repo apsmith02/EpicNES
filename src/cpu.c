@@ -15,7 +15,12 @@ typedef enum {
 
 /* PRIVATE FUNCTIONS */
 
+//If there is a pending DMC DMA transfer, start it
+static void StartDMCDMA(CPU* cpu, uint16_t dummyAddr);
+
 static uint8_t _Read(CPU* cpu, uint16_t addr, AccessType access) {
+    StartDMCDMA(cpu, addr);
+
     cpu->instr_cycle++;
     cpu->access_type = access;
 
@@ -44,7 +49,7 @@ static uint8_t Read(CPU* cpu, uint16_t addr) {
 }
 
 static void Write(CPU* cpu, uint16_t addr, uint8_t data) {
-    return _Write(cpu, addr, data, ACCESS_WRITE);
+    _Write(cpu, addr, data, ACCESS_WRITE);
 }
 
 static uint8_t DummyRead(CPU* cpu, uint16_t addr) {
@@ -52,7 +57,7 @@ static uint8_t DummyRead(CPU* cpu, uint16_t addr) {
 }
 
 static void DummyWrite(CPU* cpu, uint16_t addr, uint8_t data) {
-    return _Write(cpu, addr, data, ACCESS_DUMMY_WRITE);
+    _Write(cpu, addr, data, ACCESS_DUMMY_WRITE);
 }
 
 static uint8_t Peek(CPU* cpu, uint16_t addr) {
@@ -168,6 +173,24 @@ static void Branch(CPU* cpu, int takeBranch);
 *  TODO: Implement interrupt hijacking.
 */
 static void HandleInterrupt(CPU* cpu, InterruptType interrupt);
+
+
+static void StartDMCDMA(CPU* cpu, uint16_t dummyAddr) {
+    if (cpu->dmcdma) {
+        cpu->dmc_halt = true; //Set DMC halt flag so CPU_DMCDMA() doesn't set dmcdma flag during DMA
+        cpu->dmcdma = false;
+        
+        DummyRead(cpu, dummyAddr); //Halt cycle
+        DummyRead(cpu, dummyAddr); //Dummy cycle
+        if (cpu->state.cycles % 2 == 1)
+            DummyRead(cpu, dummyAddr); //Odd cycle: Alignment cycle
+        
+        assert(cpu->dmcloadfn != NULL);
+        cpu->dmcloadfn(cpu->fndata, Read(cpu, cpu->dmcdma_addr)); //DMA transfer cycle
+
+        cpu->dmc_halt = false;
+    }
+}
 
 /* OPCODES */
 
@@ -286,6 +309,11 @@ void CPU_SetPeekFn(CPU *cpu, CPUPeekFn peekfn)
     cpu->peekfn = peekfn;
 }
 
+void CPU_SetDMCLoadFn(CPU *cpu, CPU_DMCLoadFn dmcloadfn)
+{
+    cpu->dmcloadfn = dmcloadfn;
+}
+
 void CPU_PowerOn(CPU *cpu)
 {
     CPUState* state = &cpu->state;
@@ -330,6 +358,7 @@ int CPU_Exec(CPU *cpu)
     //Execute instruction
     opcodeFn(cpu, ADDRMODE_TABLE[opcode]);
 
+
     //Begin OAM DMA
     if (cpu->oamdma) {
         DummyRead(cpu, state->pc); //Halt cycle
@@ -345,6 +374,9 @@ int CPU_Exec(CPU *cpu)
 
         cpu->oamdma = false;
     }
+    //DMC DMA
+    StartDMCDMA(cpu, state->pc);
+
 
     //Handle interrupts
     if (state->nmi) {
@@ -361,8 +393,17 @@ int CPU_Exec(CPU *cpu)
 
 void CPU_NMI(CPU *cpu) { cpu->state.nmi = 1; }
 
+void CPU_DMCDMA(CPU* cpu, uint16_t addr) {
+    if (!cpu->dmc_halt) {
+        cpu->dmcdma = true;
+        cpu->dmcdma_addr = addr;
+    }
+}
+
 int CPU_Disassemble(CPU *cpu, uint16_t instr_addr, char *buffer, size_t n)
 {
+    
+
     uint8_t opcode = Peek(cpu, instr_addr);
     uint8_t op1 = Peek(cpu, instr_addr + 1);
     uint8_t op2 = Peek(cpu, instr_addr + 2);

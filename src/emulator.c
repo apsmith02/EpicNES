@@ -8,6 +8,7 @@
 
 void TriggerDebugPause(Emulator* emu);
 
+
 void MapNTHorizontal(Emulator* emu) {
     Mem_PPUMapPages(&emu->memory, 0x20, 0x23, MEM_VRAM, 0x00);
     Mem_PPUMapPages(&emu->memory, 0x24, 0x27, MEM_VRAM, 0x00);
@@ -25,6 +26,7 @@ void MapNTVertical(Emulator* emu) {
 uint8_t OnCPURead(void* emulator, uint16_t addr) {
     Emulator* emu = (Emulator*)emulator;
     Memory* memory = &emu->memory;
+    Mapper_Base* mapper = emu->mapper;
 
     //Debug: Break on step or breakpoint hit, flag opcodes on opcode fetch
     if (emu->debug_enable) {
@@ -45,7 +47,8 @@ uint8_t OnCPURead(void* emulator, uint16_t addr) {
     }
 
     bool iNmi = PPU_NMISignal(&emu->ppu);
-    uint8_t val = Mem_CPURead(memory, addr);
+
+    uint8_t data = mapper->vtable->cpuRead(mapper, emu, addr);
 
     APU_CPUCycle(&emu->apu);
     PPU_Cycle(&emu->ppu);
@@ -54,12 +57,13 @@ uint8_t OnCPURead(void* emulator, uint16_t addr) {
     
     if (iNmi && !PPU_NMISignal(&emu->ppu))
         CPU_NMI(&emu->cpu);
-    return val;
+    return data;
 }
 
 void OnCPUWrite(void* emulator, uint16_t addr, uint8_t data) {
     Emulator* emu = (Emulator*)emulator;
     Memory* memory = &emu->memory;
+    Mapper_Base* mapper = emu->mapper;
 
     //Debug: Break on step or breakpoint hit
     if (emu->debug_enable) {
@@ -73,7 +77,7 @@ void OnCPUWrite(void* emulator, uint16_t addr, uint8_t data) {
 
     bool iNmi = PPU_NMISignal(&emu->ppu);
     
-    Mem_CPUWrite(memory, addr, data);
+    mapper->vtable->cpuWrite(mapper, emu, addr, data);
 
     APU_CPUCycle(&emu->apu);
     PPU_Cycle(&emu->ppu);
@@ -84,9 +88,13 @@ void OnCPUWrite(void* emulator, uint16_t addr, uint8_t data) {
         CPU_NMI(&emu->cpu);
 }
 
-uint8_t CPUPeek(void* emulator, uint16_t addr) {
+uint8_t OnCPUPeek(void* emulator, uint16_t addr) {
     Emulator* emu = (Emulator*)emulator;
     return Mem_CPUPeek(&emu->memory, addr);
+}
+
+void OnCPUDMCLoad(Emulator* emu, uint8_t sampleData) {
+    APU_DMCLoadSample(&emu->apu, sampleData);
 }
 
 uint8_t OnPPURead(void* emulator, uint16_t addr) {
@@ -158,12 +166,19 @@ Emulator *Emu_Create()
 {
     Emulator* emu = malloc(sizeof(Emulator));
     memset(emu, 0, sizeof(Emulator));
+    
     Mem_Init(&emu->memory);
+
     CPU_Init(&emu->cpu, &OnCPURead, &OnCPUWrite, emu);
-    CPU_SetPeekFn(&emu->cpu, &CPUPeek);
+    CPU_SetPeekFn(&emu->cpu, &OnCPUPeek);
+    CPU_SetDMCLoadFn(&emu->cpu, (CPU_DMCLoadFn)&OnCPUDMCLoad);
+
     PPU_Init(&emu->ppu, &OnPPURead, &OnPPUWrite, emu);
-    APU_Init(&emu->apu, NTSC_CPU_CLOCK, 44100);
+
+    APU_Init(&emu->apu, &CPU_DMCDMA, &emu->cpu, NTSC_CPU_CLOCK, 44100);
+
     StdController_Init(&emu->controller);
+
     Vec_BP_Init(&emu->breakpoints);
 
     Memory* memory = &emu->memory;
@@ -215,22 +230,30 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
     }
 
     Memory* memory = &emu->memory;
+
     //Load PRG and CHR ROM
+    if (ines->prg_units == 0) {
+        fprintf(stderr, "Error: ROM has no PRG ROM.\n");
+        return -1;
+    }
     Mem_Load_PRG_ROM(memory, ines, rom_file);
+    if (ines->chr_units == 0) {
+        fprintf(stderr, "Error: ROM has no CHR ROM.\n");
+        return -1;
+    }
     Mem_Load_CHR_ROM(memory, ines, rom_file);
     fclose(rom_file);
 
+    const Mapper_Vtable* mapper_vtbl;
+    if (ines->mapper >= NUM_MAPPERS || (mapper_vtbl = MAPPER_VTABLES[ines->mapper]) == NULL) {
+        fprintf(stderr, "Error: This ROM uses mapper %u, which is not supported by this emulator.\n", ines->mapper);
+        return -1;
+    }
+    emu->mapper = Mapper_CreateFromVtable(mapper_vtbl, emu);
+    
+    /*
     //Check mapper
     if (ines->mapper == 0) { //NROM
-        if (ines->prg_units == 0) {
-            fprintf(stderr, "Error: ROM has no PRG ROM.\n");
-            return -1;
-        }
-        if (ines->chr_units == 0) {
-            fprintf(stderr, "Error: ROM has no CHR ROM.\n");
-            return -1;
-        }
-
         //Create VRAM
         Mem_Create_VRAM(memory, 0x800);
 
@@ -251,6 +274,7 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
         Emu_CloseROM(emu);
         return -1;
     }
+    */
     
     emu->is_rom_loaded = 1;
 
@@ -263,6 +287,8 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
 void Emu_CloseROM(Emulator *emu)
 {
     emu->is_rom_loaded = 0;
+    Mapper_Destroy(emu->mapper, emu);
+    emu->mapper = NULL;
 }
 
 int Emu_IsROMLoaded(Emulator *emu)
@@ -365,9 +391,9 @@ void Emu_DebugSetCodeBreakpoint(Emulator *emu, unsigned addr)
     Breakpoint bp;
     Mem_CPUToMemAddr(memory, addr, &bp.type, &bp.start);
     bp.end = bp.start;
-    bp.rwx = MEMDEBUG_BREAK_X;
+    bp.access = MEMDEBUG_BREAK_X;
 
-    Mem_SetBreakFlags(memory, bp.type, bp.start, bp.end, bp.rwx);
+    Mem_SetBreakFlags(memory, bp.type, bp.start, bp.end, bp.access);
     Vec_BP_Add(&emu->breakpoints, bp);
 }
 
@@ -381,10 +407,10 @@ void Emu_DebugSetBreakpointRange(Emulator *emu, MemoryType type, int break_on_fl
     Breakpoint bp = {
         .start = start_addr,
         .end = end_addr,
-        .rwx = break_on_flags,
+        .access = break_on_flags,
         .type = type
     };
-    Mem_SetBreakFlags(&emu->memory, bp.type, bp.start, bp.end, bp.rwx);
+    Mem_SetBreakFlags(&emu->memory, bp.type, bp.start, bp.end, bp.access);
     Vec_BP_Add(&emu->breakpoints, bp);
 }
 
@@ -400,7 +426,7 @@ void Emu_DebugDeleteBreakpoint(Emulator *emu, size_t index)
     //Reapply flags from other breakpoints in list
     for (size_t i = 0; i < bplist->size; i++) {
         bp = Vec_BP_At(bplist, i);
-        Mem_SetBreakFlags(memory, bp->type, bp->start, bp->end, bp->rwx);
+        Mem_SetBreakFlags(memory, bp->type, bp->start, bp->end, bp->access);
     }
 }
 

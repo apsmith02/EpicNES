@@ -1,5 +1,6 @@
 #include "sdl_audio_buffer.h"
 #include <stdlib.h>
+#include <stdio.h>
 
 int SDLAudioBuffer_Create(SDLAudioBuffer **buffer, SDL_AudioSpec audioSpec, unsigned ringBufferScale)
 {
@@ -37,4 +38,5 @@ void _SDLAudioBufferCallback(void *userdata, Uint8 *stream, int len)
 {
     size_t l = len;
     RingBuffer_Consume(&((SDLAudioBuffer*)userdata)->buffer, stream, &l);
+    SDL_memset(stream + l, 0, len - l);
 }

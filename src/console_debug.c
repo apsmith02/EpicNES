@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 #define INPUT_BUFFER_MAX 1024
 #define CMD_MAX_ARGS 5
@@ -10,6 +11,11 @@
 DebugStepType ConsoleDebugCallback(void *emulator)
 {
     Emulator* emu = (Emulator*)emulator;
+    static int step_cycles = 0;
+    if (step_cycles > 0) {
+        step_cycles--;
+        return DEBUG_STEP_CPUCYCLE;
+    }
 
     PrintDisassembly(emu, emu->cpu.instr_addr, 4, 4);
     printf("\nCPU:\n");
@@ -47,7 +53,7 @@ DebugStepType ConsoleDebugCallback(void *emulator)
         if (!strcmp(args[0], "help")) {
             printf("apu - Print APU registers\n");
             printf("b $<instrAddr> - Set instruction breakpoint\n");
-            printf("b -rwx {cpu|ppu|ram|vram|prgrom|chrrom} $<startAddr> $<endAddr> - Set read/write/execute breakpoint in address range\n");
+            printf("b -rwx {cpu|ram|prgrom} $<startAddr> $<endAddr> - Set read/write/execute breakpoint in address range\n");
             printf("blist - List breakpoints\n");
             printf("brst {on|off} - Enable/disable break on reset\n");
             printf("c - Continue\n");
@@ -55,9 +61,11 @@ DebugStepType ConsoleDebugCallback(void *emulator)
             printf("d <listNumber> - Delete breakpoint list entry listNumber\n");
             printf("d clear - Clear breakpoint list\n");
             printf("dsm [pc | $<addr>] [<linesBefore=4>] [<linesAfter=4>] - Print disassembly\n");
+            printf("mem {cpu|ppu|ram|vram|prgrom|chrrom} $<startAddr> $<endAddr> - Print memory\n");
             printf("ppu - Print PPU registers\n");
             printf("pwr - Power cycle console\n");
             printf("sc - Step CPU cycle\n");
+            printf("sc <n> - Step n CPU cycles\n");
             printf("si - Step instruction\n");
         }
         else if (!strcmp(args[0], "apu"))       PrintAPU(emu);
@@ -68,9 +76,14 @@ DebugStepType ConsoleDebugCallback(void *emulator)
         else if (!strcmp(args[0], "cpu"))       PrintCPURegisters(emu);
         else if (!strcmp(args[0], "d"))         Cmd_d(emu, argc, args);
         else if (!strcmp(args[0], "dsm"))       Cmd_dsm(emu, argc, args);
+        else if (!strcmp(args[0], "mem"))       Cmd_mem(emu, argc, args);
         else if (!strcmp(args[0], "ppu"))       PrintPPURegisters(emu);
         else if (!strcmp(args[0], "pwr")) {     Emu_PowerOn(emu); return DEBUG_STEP_NONE; }
-        else if (!strcmp(args[0], "sc"))        return DEBUG_STEP_CPUCYCLE;
+        else if (!strcmp(args[0], "sc"))        {
+            if (argc >= 2)
+                step_cycles = atoi(args[1]) - 1;
+            return DEBUG_STEP_CPUCYCLE;
+        }
         else if (!strcmp(args[0], "si"))        return DEBUG_STEP_INTO;
         else {
             printf("Invalid command. Type 'help' for a command list.\n");
@@ -136,9 +149,9 @@ void PrintBreakpointList(Emulator *emu)
 
         printf("%u \t%c%c%c \t%-8s \t",
             (unsigned)i+1,
-            (bp.rwx & MEMDEBUG_BREAK_R) ? 'r' : '-',
-            (bp.rwx & MEMDEBUG_BREAK_W) ? 'w' : '-',
-            (bp.rwx & MEMDEBUG_BREAK_X) ? 'x' : '-',
+            (bp.access & MEMDEBUG_BREAK_R) ? 'r' : '-',
+            (bp.access & MEMDEBUG_BREAK_W) ? 'w' : '-',
+            (bp.access & MEMDEBUG_BREAK_X) ? 'x' : '-',
             typeStr
         );
         if (bp.start == bp.end) {
@@ -157,6 +170,18 @@ void PrintBreakpointList(Emulator *emu)
         else
             printf("[$%X,$%X]\n", bp.start, bp.end);
     }
+}
+
+MemoryType ParseMemoryType(const char *str)
+{
+    MemoryType type = MEM_NONE;
+    if      (!strcmp(str, "cpu"))   type = MEM_CPU;
+    else if (!strcmp(str, "ppu"))   type = MEM_PPU;
+    else if (!strcmp(str, "ram"))   type = MEM_RAM;
+    else if (!strcmp(str, "vram"))  type = MEM_VRAM;
+    else if (!strcmp(str, "prgrom"))type = MEM_PRG_ROM;
+    else if (!strcmp(str, "chrrom"))type = MEM_CHR_ROM;
+    return type;
 }
 
 void PrintCPURegisters(Emulator* emu) {
@@ -190,44 +215,71 @@ void PrintPPURegisters(Emulator* emu) {
 
 void PrintAPU(Emulator* emu) {
     APUState* state = &emu->apu.state;
+
     APUPulse* pulse1 = &state->ch_pulse1;
     APUEnvelope* p1_env = &pulse1->envelope;
+
     APUPulse* pulse2 = &state->ch_pulse2;
     APUEnvelope* p2_env = &pulse2->envelope;
+
+    APUTriangle* triangle = &state->ch_triangle;
+    
+    APUNoise* noise = &state->ch_noise;
+    APUEnvelope* n_env = &state->ch_noise.envelope;
 
     printf("Frame Counter -  5-step: [%c]  IRQ inhibit: [%c]  FC Cycle Counter: %.1f APU cycles\n",
         (state->fc_ctrl & FC_5STEP) ? 'X' : ' ',
         (state->fc_ctrl & FC_IRQ_INHIBIT) ? 'X' : ' ',
         (float)(state->fc_cycles / 2.0)
     );
-    printf("Channel Status -  DMC: [%c]  Noise: [%c]  Triangle: [%c]  Pulse 2: [%c]  Pulse 1: [%c]\n",
-        (state->status & APU_STATUS_D) ? 'X' : ' ',
-        (state->status & APU_STATUS_N) ? 'X' : ' ',
-        (state->status & APU_STATUS_T) ? 'X' : ' ',
-        (state->status & APU_STATUS_2) ? 'X' : ' ',
-        (state->status & APU_STATUS_1) ? 'X' : ' '
+    printf("Channel Enable -  DMC: [%c]  Noise: [%c]  Triangle: [%c]  Pulse 2: [%c]  Pulse 1: [%c]\n",
+        ' ',
+        noise->length.enabled ? 'X' : ' ',
+        triangle->length.enabled ? 'X' : ' ',
+        pulse2->length.enabled ? 'X' : ' ',
+        pulse1->length.enabled ? 'X' : ' '
     );
     printf("Pulse 1 -  Period: %d  Timer: %d  Duty: %d  Duty Pos: %d\n",
-        (int)pulse1->period, (int)pulse1->timer, (int)pulse1->duty, (int)pulse1->sequencer);
+        (int)pulse1->period, (int)pulse1->timer, (int)pulse1->duty, (int)pulse1->duty_pos);
     printf(" Env Start: [%c]  Env Loop / Length Halt: [%c]  Env Const Volume: [%c]  Env Period/Volume: %d  Env Divider: %d  Env Decay: %d  Length Counter: %d\n",
         p1_env->start ? 'X' : ' ',
-        p1_env->loop ? 'X' : ' ',
+        pulse1->length.halt ? 'X' : ' ',
         p1_env->constant_volume ? 'X' : ' ',
         (int)p1_env->period,
         (int)p1_env->divider,
         (int)p1_env->decay,
-        (int)pulse1->length
+        (int)pulse1->length.counter
     );
     printf("Pulse 2 -  Period: %d  Timer: %d  Duty: %d  Duty Pos: %d\n",
-        (int)pulse2->period, (int)pulse2->timer, (int)pulse2->duty, (int)pulse2->sequencer);
+        (int)pulse2->period, (int)pulse2->timer, (int)pulse2->duty, (int)pulse2->duty_pos);
     printf(" Env Start: [%c]  Env Loop / Length Halt: [%c]  Env Const Volume: [%c]  Env Period/Volume: %d  Env Divider: %d  Env Decay: %d  Length Counter: %d\n",
         p2_env->start ? 'X' : ' ',
-        p2_env->loop ? 'X' : ' ',
+        pulse2->length.halt ? 'X' : ' ',
         p2_env->constant_volume ? 'X' : ' ',
         (int)p2_env->period,
         (int)p2_env->divider,
         (int)p2_env->decay,
-        (int)pulse2->length
+        (int)pulse2->length.counter
+    );
+    printf("Triangle - Period: %d  Timer: %d  Wave Pos: %d\n", 
+        (int)triangle->period, (int)triangle->timer, (int)triangle->wave_pos);
+    printf(" Length Counter: %d  Linear Counter: %d  Linear Ctr Reload Value: %d  Linear Ctr Reload: [%c]\n",
+        (int)triangle->length.counter, (int)triangle->linear_counter, (int)triangle->linear_reload_value, triangle->linear_reload ? 'X' : ' ');
+    printf("Noise - Period: %d  Timer: %d  LFSR: %d%d%d%d%d%d%d%d%d%d%d%d%d%d%d",
+        (int)noise->period, (int)noise->timer,
+        (int)(noise->lfsr >> 14 & 1), (int)(noise->lfsr >> 13 & 1), (int)(noise->lfsr >> 12 & 1),
+        (int)(noise->lfsr >> 11 & 1), (int)(noise->lfsr >> 10 & 1), (int)(noise->lfsr >> 9 & 1), (int)(noise->lfsr >> 8 & 1),
+        (int)(noise->lfsr >> 7 & 1), (int)(noise->lfsr >> 6 & 1), (int)(noise->lfsr >> 5 & 1), (int)(noise->lfsr >> 4 & 1),
+        (int)(noise->lfsr >> 3 & 1), (int)(noise->lfsr >> 2 & 1), (int)(noise->lfsr >> 1 & 1), (int)(noise->lfsr & 1)
+    );
+    printf(" Env Start: [%c]  Env Loop / Length Halt: [%c]  Env Const Volume: [%c]  Env Period/Volume: %d  Env Divider: %d  Env Decay: %d  Length Counter: %d\n",
+        n_env->start ? 'X' : ' ',
+        noise->length.halt ? 'X' : ' ',
+        n_env->constant_volume ? 'X' : ' ',
+        (int)n_env->period,
+        (int)n_env->divider,
+        (int)n_env->decay,
+        (int)noise->length.counter
     );
 }
 
@@ -240,40 +292,35 @@ void Cmd_b(Emulator *emu, int argc, char *args[])
             return;
         }
     } else if (argc == 5 && 
-        !strncmp(args[1], "-", 1) &&//-rwx flag
+        !strncmp(args[1], "-", 1) &&//-access flag
         !strncmp(args[3], "$", 1) &&//$<startAddr>
         !strncmp(args[4], "$", 1)   //$<endAddr>
     ) {
         Breakpoint bp;
-        //Parse -rwx flags
-        bp.rwx = 0;
+        //Parse -access flags
+        bp.access = 0;
         for (int i = 1; args[1][i] != '\0'; i++) {
             switch (args[1][i]) {
-                case 'r': bp.rwx |= MEMDEBUG_BREAK_R; break;
-                case 'w': bp.rwx |= MEMDEBUG_BREAK_W; break;
-                case 'x': bp.rwx |= MEMDEBUG_BREAK_X; break;
+                case 'r': bp.access |= MEMDEBUG_BREAK_R; break;
+                case 'w': bp.access |= MEMDEBUG_BREAK_W; break;
+                case 'x': bp.access |= MEMDEBUG_BREAK_X; break;
                 default: break;
             }
         }
-        if (bp.rwx > 0) {
+        if (bp.access > 0) {
             //Parse memory type
-            if      (!strcmp(args[2], "cpu"))   bp.type = MEM_CPU;
-            else if (!strcmp(args[2], "ppu"))   bp.type = MEM_PPU;
-            else if (!strcmp(args[2], "ram"))   bp.type = MEM_RAM;
-            else if (!strcmp(args[2], "vram"))  bp.type = MEM_VRAM;
-            else if (!strcmp(args[2], "prgrom"))bp.type = MEM_PRG_ROM;
-            else if (!strcmp(args[2], "chrrom"))bp.type = MEM_CHR_ROM;
+            bp.type = ParseMemoryType(args[2]);
             if (bp.type != MEM_NONE) {
                 bp.start = strtoul(&args[3][1], NULL, 16);
                 bp.end = strtoul(&args[4][1], NULL, 16);
-                Emu_DebugSetBreakpointRange(emu, bp.type, bp.rwx, bp.start, bp.end);
+                Emu_DebugSetBreakpointRange(emu, bp.type, bp.access, bp.start, bp.end);
                 return;
             }
         }
     }
     printf("Usage:\n");
     printf(" b $<instrAddr>\n");
-    printf(" b -rwx {cpu|ppu|ram|vram|prgrom|chrrom} $<startAddr> $<endAddr>\n");
+    printf(" b -rwx {cpu|ram|prgrom} $<startAddr> $<endAddr>\n");
 }
 
 void Cmd_brst(Emulator *emu, int argc, char *args[])
@@ -329,4 +376,47 @@ void Cmd_dsm(Emulator *emu, int argc, char *args[])
         linesAfter = atoi(args[3]);
     }
     PrintDisassembly(emu, addr, linesBefore, linesAfter);
+}
+
+void Cmd_mem(Emulator *emu, int argc, char *args[])
+{
+    if (argc >= 4) {
+        MemoryType type = ParseMemoryType(args[1]);
+        if (type != MEM_NONE && args[2][0] == '$' && args[3][0] == '$') {
+            unsigned start = strtoul(&args[2][1], NULL, 16);
+            unsigned end = strtoul(&args[3][1], NULL, 16);
+            
+            Memory* memory = &emu->memory;
+
+            //Display hex dump divided into 16 byte rows
+
+            start &= ~0xF; //Round down start address to 16-byte alignment
+            end &= ~0xF; //Round up end address to 16-byte alignment
+            end += 0x10;
+            
+            unsigned size;
+            if (type == MEM_CPU)        size = CPU_ADDR_SPACE;
+            else if (type == MEM_PPU)   size = PPU_ADDR_SPACE;
+            else                        size = Mem_Size(memory, type);
+
+            end = min(end, size);
+            
+            printf("         | $0  $1  $2  $3  $4  $5  $6  $7  $8  $9  $A  $B  $C  $D  $E  $F\n\n");
+            while (start < end) {
+                printf("$%08X|", start);
+                for (unsigned i = start; i < start + 0x10 && i < end; i++) {
+                    uint8_t byte;
+                    if (type == MEM_CPU)        byte = Mem_CPUPeek(memory, i);
+                    else if (type == MEM_PPU)   byte = Mem_PPUPeek(memory, i);
+                    else                        byte = Mem_Get(memory, type, i);
+                    printf(" $%02X", byte);
+                }
+                printf("\n");
+                start += 0x10;
+            }
+            return;
+        }
+    }
+    printf("Usage:\n");
+    printf(" mem {cpu|ppu|ram|vram|prgrom|chrrom} $<startAddr> $<endAddr>\n");
 }

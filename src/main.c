@@ -42,14 +42,19 @@ int main(int argc, char** argv){
     
     // Initialize emulator
     Emulator* emulator = Emu_Create();
+    //Configure volume
+    APU_SetChannelVolume(&emulator->apu, APU_CH_MASTER, 0.25);
+    //Load ROM
     if (Emu_LoadROM(emulator, rompath) != 0)
         return -1;
+    //Set up debugger
     Emu_SetDebugPauseCallback(emulator, &ConsoleDebugCallback, (void*)emulator);
-    Emu_DebugEnable(emulator, true); //Enable emulator debugging
+    Emu_DebugEnable(emulator, true);
 
     // Initialize SDL2
     
     SDL_Window* window;
+    char window_title[32];
     SDL_Renderer* renderer;
     SDL_Texture* screen_texture;
     SDL_Rect screen_rect = {
@@ -73,9 +78,9 @@ int main(int argc, char** argv){
     }
 
     // Create window and renderer
-
+    snprintf(window_title, sizeof(window_title), "EpicNES");
     window = SDL_CreateWindow(
-        "EpicNES", 
+        window_title, 
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 
         screen_rect.w, screen_rect.h, 0);
     if (window == NULL) {
@@ -112,7 +117,7 @@ int main(int argc, char** argv){
     }
     SDL_RenderPresent(renderer);
 
-    Uint32 fps = 60;
+    Uint32 max_fps = 60;
     bool running = true;
     while (running) {
         Uint32 start = SDL_GetTicks();
@@ -135,11 +140,55 @@ int main(int argc, char** argv){
                         case SDL_SCANCODE_DOWN:     Emu_PressButton(emulator, BUTTON_DOWN);     break;
                         case SDL_SCANCODE_LEFT:     Emu_PressButton(emulator, BUTTON_LEFT);     break;
                         case SDL_SCANCODE_RIGHT:    Emu_PressButton(emulator, BUTTON_RIGHT);    break;
+                        case SDL_SCANCODE_R:
+                            if (e.key.keysym.mod & KMOD_CTRL) //CTRL+R: Reset
+                                Emu_PowerOn(emulator);
+                            break;
                         //Other
-                        case SDL_SCANCODE_GRAVE:    Emu_DebugPause(emulator); break; //~: Debug pause
+                        case SDL_SCANCODE_U:
+                            if (e.key.keysym.mod & KMOD_CTRL) { //CTRL+U: Unlimited speed
+                                if (max_fps == 60)
+                                    max_fps = 1000;
+                                else
+                                    max_fps = 60;
+                            }
+                            break;
+                        case SDL_SCANCODE_GRAVE: //~: Debug pause
+                            Emu_DebugPause(emulator); break;
                         case SDL_SCANCODE_ESCAPE:   running = false; break;
-                        case SDL_SCANCODE_R: 
-                        if (e.key.keysym.mod & KMOD_CTRL) Emu_PowerOn(emulator); break; //CTRL+R: Reset
+                        
+                        case SDL_SCANCODE_F6: //F6: Toggle Pulse 1 mute
+                            APU_SetChannelMute(&emulator->apu, APU_CH_PULSE1, !APU_GetChannelMute(&emulator->apu, APU_CH_PULSE1));
+                            printf("Pulse 1 %smuted\n", APU_GetChannelMute(&emulator->apu, APU_CH_PULSE1) ? "" : "un");
+                            break;
+                        case SDL_SCANCODE_F7: //F7: Toggle Pulse 2 mute
+                            APU_SetChannelMute(&emulator->apu, APU_CH_PULSE2, !APU_GetChannelMute(&emulator->apu, APU_CH_PULSE2));
+                            printf("Pulse 2 %smuted\n", APU_GetChannelMute(&emulator->apu, APU_CH_PULSE2) ? "" : "un");
+                            break;
+                        case SDL_SCANCODE_F8: //F8: Toggle Triangle mute
+                            APU_SetChannelMute(&emulator->apu, APU_CH_TRIANGLE, !APU_GetChannelMute(&emulator->apu, APU_CH_TRIANGLE));
+                            printf("Triangle %smuted\n", APU_GetChannelMute(&emulator->apu, APU_CH_TRIANGLE) ? "" : "un");
+                            break;
+                        case SDL_SCANCODE_F9: //F9: Toggle Noise mute
+                            APU_SetChannelMute(&emulator->apu, APU_CH_NOISE, !APU_GetChannelMute(&emulator->apu, APU_CH_NOISE));
+                            printf("Noise %smuted\n", APU_GetChannelMute(&emulator->apu, APU_CH_NOISE) ? "" : "un");
+                            break;
+                        case SDL_SCANCODE_F10: //F10: Toggle DMC mute
+                            APU_SetChannelMute(&emulator->apu, APU_CH_DMC, !APU_GetChannelMute(&emulator->apu, APU_CH_DMC));
+                            printf("DMC %smuted\n", APU_GetChannelMute(&emulator->apu, APU_CH_DMC) ? "" : "un");
+                            break;
+                            case SDL_SCANCODE_F11: //F11: Toggle Master mute
+                            APU_SetChannelMute(&emulator->apu, APU_CH_MASTER, !APU_GetChannelMute(&emulator->apu, APU_CH_MASTER));
+                            printf("Master volume %smuted\n", APU_GetChannelMute(&emulator->apu, APU_CH_MASTER) ? "" : "un");
+                            break;
+                        case SDL_SCANCODE_MINUS: //-: Master volume down
+                            APU_SetChannelVolume(&emulator->apu, APU_CH_MASTER, APU_GetChannelVolume(&emulator->apu, APU_CH_MASTER) - 0.05);
+                            printf("Master volume: %.0lf%%\n", APU_GetChannelVolume(&emulator->apu, APU_CH_MASTER) * 100.0);
+                            break;
+                        case SDL_SCANCODE_EQUALS: //= (+): Master volume up
+                            APU_SetChannelVolume(&emulator->apu, APU_CH_MASTER, APU_GetChannelVolume(&emulator->apu, APU_CH_MASTER) + 0.05);
+                            printf("Master volume: %.0lf%%\n", APU_GetChannelVolume(&emulator->apu, APU_CH_MASTER) * 100.0);
+                            break;
                         default: break;
                     }
                     break;
@@ -157,7 +206,7 @@ int main(int argc, char** argv){
                     }
             }
         }
-
+        
         //Run emulator
         if (Emu_RunFrame(emulator) != 0)
             return -1;
@@ -173,14 +222,21 @@ int main(int argc, char** argv){
         //Queue samples from audio output
         size_t len;
         void* emuAudio = Emu_GetAudioBuffer(emulator, &len);
+        size_t iLen = len;
         SDLAudioBuffer_QueueAudio(audioBuffer, emuAudio, &len);
         Emu_ClearAudioBuffer(emulator);
 
         //Limit FPS
+        Uint32 fps;
+        Uint32 msPerFrame = 1000 / max_fps;
         Uint32 dt = SDL_GetTicks() - start;
-        Uint32 msPerFrame = 1000 / fps;
-        if (dt <= msPerFrame)
+        if (dt <= msPerFrame) {
             SDL_Delay(msPerFrame - dt);
+            fps = max_fps;
+        } else
+            fps = (Uint32)(1.0 / ((double)dt / 1000.0));
+        snprintf(window_title, sizeof(window_title), "EpicNES (%u FPS)", fps);
+        SDL_SetWindowTitle(window, window_title);
     }
 
     printf("Exiting emulator...\n");

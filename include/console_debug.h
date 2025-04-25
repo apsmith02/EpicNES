@@ -16,11 +16,13 @@ void PrintAPU(Emulator* emu);
 
 void PrintBreakpointList(Emulator* emu);
 
+MemoryType ParseMemoryType(const char* str);
+
 /**
  * Breakpoint set
  * Usage:
  * - b $<instrAddr>
- * - b -rwx {cpu|ppu|ram|vram|prgrom|chrrom} $<startAddr> $<endAddr>
+ * - b -rwx {cpu|ram|prgrom} $<startAddr> $<endAddr>
 */
 void Cmd_b(Emulator* emu, int argc, char* args[]);
 
@@ -51,6 +53,6 @@ void Cmd_dsm(Emulator* emu, int argc, char* args[]);
  * Usage:
  * - mem {cpu|ppu|ram|vram|prgrom|chrrom} $<startAddr> $<endAddr>
 */
-//void Cmd_mem(Emulator* emu, int argc, char* args[]);
+void Cmd_mem(Emulator* emu, int argc, char* args[]);
 
 #endif

@@ -81,9 +81,11 @@ typedef struct {
     int irq;
 } CPUState;
 
-typedef uint8_t(*CPUReadFn)(void*, uint16_t);
-typedef void(*CPUWriteFn)(void*, uint16_t, uint8_t);
+typedef uint8_t(*CPUReadFn)(void* fndata, uint16_t addr);
+typedef void(*CPUWriteFn)(void* fndata, uint16_t addr, uint8_t data);
 typedef CPUReadFn CPUPeekFn;
+//DMC DMA transfer callback
+typedef void(*CPU_DMCLoadFn)(void* fndata, uint8_t sampleData);
 
 typedef struct {
     //Callback functions
@@ -91,12 +93,17 @@ typedef struct {
     CPUReadFn readfn;
     CPUWriteFn writefn;
     CPUPeekFn peekfn;
+    CPU_DMCLoadFn dmcloadfn;
+
     void* fndata;
 
     //CPU state
     CPUState state;
     bool oamdma; //Set when OAMDMA ($4014) is written, causes CPU_Exec to begin OAM DMA after the current instruction.
     uint8_t oamdma_page;
+    bool dmcdma; //Set when DMC DMA is scheduled by the APU DMC channel, causes DMC DMA to begin on the next read cycle.
+    uint16_t dmcdma_addr;
+    bool dmc_halt; //Set when the CPU is halted for DMC DMA
 
     //Log file
     FILE* log;
@@ -125,6 +132,12 @@ void CPU_Init(CPU* cpu, CPUReadFn readfn, CPUWriteFn writefn, void* fndata);
 */
 void CPU_SetPeekFn(CPU* cpu, CPUPeekFn peekfn);
 
+/*
+* CPU_SetDMCLoadFn - Set the DMC load callback. This is called when a DMC DMA occurs and reads
+* a DPCM sample byte. The sample byte is passed to the function. Use this to copy sample data
+* to the APU DMC sample buffer.
+*/
+void CPU_SetDMCLoadFn(CPU* cpu, CPU_DMCLoadFn dmcloadfn);
 
 
 //Reset the CPU from its power-on state. Runs the reset sequence, which does 7 read cycles.
@@ -144,6 +157,12 @@ int CPU_Exec(CPU* cpu);
 * Trigger an NMI.
 */
 void CPU_NMI(CPU* cpu);
+
+/*
+* Schedule a DMC DMA. Requires the DMC load callback to be set with CPU_SetDMCLoadFn().
+*/
+void CPU_DMCDMA(CPU* cpu, uint16_t addr);
+
 
 /*
 * Print the disassembly of an instruction at an address to a string buffer of size n.

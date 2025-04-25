@@ -8,13 +8,14 @@
 #include "ppu.h"
 #include "apu.h"
 #include "standard_controller.h"
+#include "mapper.h"
 
 
 typedef struct {
     unsigned start;     //Start address
     unsigned end;       //End address
     MemoryType type;    //Memory type
-    uint8_t rwx;        //DebugBreakOn flags
+    uint8_t access;        //DebugBreakOn flags
 } Breakpoint;
 
 typedef struct {
@@ -42,11 +43,9 @@ typedef enum {
 typedef DebugStepType(*DebugPauseCallback)(void*);
 
 
-typedef struct {
+struct Emulator {
     INESHeader rom_ines;
-    //ROM rom;
-    int is_rom_loaded;
-
+    Mapper_Base* mapper;
     CPU cpu;
     PPU ppu;
     APU apu;
@@ -54,6 +53,7 @@ typedef struct {
 
     Memory memory;
 
+    int is_rom_loaded;
     bool power_on_queued;
 
     // Debugging
@@ -67,7 +67,7 @@ typedef struct {
     DebugStepType debug_step;
 
     Vec_Breakpoint breakpoints;
-} Emulator;
+};
 
 Emulator* Emu_Create();
 
