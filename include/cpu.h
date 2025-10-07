@@ -34,6 +34,8 @@ static const char* OPCODE_NAMES[256] = {
 * The ACCESS_DUMMY flag is used to indicate a dummy read/write. This flag can be used in a breakpoint's
 * access flags to include or exclude dummy reads/writes in the breakpoint condition,
 * i.e. only break if the CPU's ACCESS_DUMMY flag is clear or the breakpoint's ACCESS_DUMMY flag is set.
+*
+* Use the ACCESS_DMA flag to indicate that a read/write is part of a DMA memory access.
 */
 typedef enum {
     ACCESS_READ         = 1,
@@ -45,7 +47,9 @@ typedef enum {
     ACCESS_DUMMY_READ   = ACCESS_DUMMY | ACCESS_READ,
     ACCESS_DUMMY_WRITE  = ACCESS_DUMMY | ACCESS_WRITE,
 
-    ACCESS_MASK         = ACCESS_READ | ACCESS_WRITE | ACCESS_EXECUTE | ACCESS_DUMMY,
+    ACCESS_DMA          = 1 << 4,
+
+    ACCESS_MASK         = ACCESS_READ | ACCESS_WRITE | ACCESS_EXECUTE | ACCESS_DUMMY | ACCESS_DMA,
     /*The bit to the left of the most significant AccessType bit. Use this to determine where to add
     * additional bit flags to store with the AccessType flags in a debug flag storage scheme.
     */
@@ -81,29 +85,34 @@ typedef struct {
     int irq;
 } CPUState;
 
-typedef uint8_t(*CPUReadFn)(void* fndata, uint16_t addr);
-typedef void(*CPUWriteFn)(void* fndata, uint16_t addr, uint8_t data);
+typedef struct CPU CPU;
+
+typedef uint8_t(*CPUReadFn)(void* context, uint16_t addr);
+typedef void(*CPUWriteFn)(void* context, uint16_t addr, uint8_t data);
 typedef CPUReadFn CPUPeekFn;
+/*
+* @param nextAddr The address the CPU was going to read before it halted. Use this address to perform DMA dummy read cycles.
+*/
+typedef void(*CPUHaltFn)(void* context, CPU *cpu, uint16_t nextAddr);
+
+typedef struct {
+    void *context; //Context pointer that is passed to every callback
+    CPUReadFn onread; //Called on CPU memory read cycles. This function should read from memory at the address passed to it, and return the read value.
+    CPUWriteFn onwrite; //Called on CPU memory write cycles. This function should write to memory at the address passed to it.
+    CPUPeekFn onpeek; //Peek at values in memory without side-effects. Not required for normal execution, but used by functions like CPU_Disassemble().
+    CPUHaltFn onhalt; //Called when the CPU is halted. Use this to implement DMAs.
+} CPUCallbacks;
+
 //DMC DMA transfer callback
 typedef void(*CPU_DMCLoadFn)(void* fndata, uint8_t sampleData);
 
-typedef struct {
+struct CPU {
     //Callback functions
-
-    CPUReadFn readfn;
-    CPUWriteFn writefn;
-    CPUPeekFn peekfn;
-    CPU_DMCLoadFn dmcloadfn;
-
-    void* fndata;
+    CPUCallbacks callbacks;
 
     //CPU state
     CPUState state;
-    bool oamdma; //Set when OAMDMA ($4014) is written, causes CPU_Exec to begin OAM DMA after the current instruction.
-    uint8_t oamdma_page;
-    bool dmcdma; //Set when DMC DMA is scheduled by the APU DMC channel, causes DMC DMA to begin on the next read cycle.
-    uint16_t dmcdma_addr;
-    bool dmc_halt; //Set when the CPU is halted for DMC DMA
+    bool halt;
 
     //Log file
     FILE* log;
@@ -112,33 +121,15 @@ typedef struct {
     uint16_t instr_addr; //Address of current instruction being executed
     int instr_cycle; //Cycle in current instruction being executed (starting from 1)
     AccessType access_type; //Access type of current cycle
-} CPU;
-
+};
 
 
 /*
-* CPU_Init - Initialize a CPU struct.
+* Initialize a CPU struct.
 * 
-* @param readfn CPU Read callback. Called on every read cycle, i.e. when the CPU reads memory from an address.
-* @param writefn CPU Write callback. Called on every write cycle, i.e. when the CPU writes to a memory address.
-* @param fndata Pointer to data that is passed to the read/write callbacks, such as the CPU's memory.
+* @param callbacks A struct containing the callback context and callback functions.
 */
-void CPU_Init(CPU* cpu, CPUReadFn readfn, CPUWriteFn writefn, void* fndata);
-
-/*
-* CPU_SetPeekFn - Set the CPU Peek callback. This is not required for CPU execution, but is used by
-* functions like CPU_Disassemble() to peek at values in memory without any side effects.
-* The peek function is passed the same data pointer that is passed to the read/write callbacks.
-*/
-void CPU_SetPeekFn(CPU* cpu, CPUPeekFn peekfn);
-
-/*
-* CPU_SetDMCLoadFn - Set the DMC load callback. This is called when a DMC DMA occurs and reads
-* a DPCM sample byte. The sample byte is passed to the function. Use this to copy sample data
-* to the APU DMC sample buffer.
-*/
-void CPU_SetDMCLoadFn(CPU* cpu, CPU_DMCLoadFn dmcloadfn);
-
+void CPU_Init(CPU *cpu, CPUCallbacks callbacks);
 
 //Reset the CPU from its power-on state. Runs the reset sequence, which does 7 read cycles.
 void CPU_PowerOn(CPU* cpu);
@@ -154,14 +145,37 @@ void CPU_SoftReset(CPU* cpu);
 int CPU_Exec(CPU* cpu);
 
 /*
-* Trigger an NMI.
+* Schedule an NMI.
 */
 void CPU_NMI(CPU* cpu);
 
 /*
-* Schedule a DMC DMA. Requires the DMC load callback to be set with CPU_SetDMCLoadFn().
+* Schedule a halt to occur before the next read cycle.
 */
-void CPU_DMCDMA(CPU* cpu, uint16_t addr);
+void CPU_ScheduleHalt(CPU *cpu);
+
+/*
+* Perform a read to CPU memory.
+* This function should be used to read from the CPU's memory while the CPU is halted
+* in order to update the CPU cycle counter and debug information.
+*
+* @param addr The memory address to read from
+* @param access Indicates the memory access type for the debugger
+*
+* @return The value in memory at the given address.
+*/
+uint8_t CPU_Read(CPU *cpu, uint16_t addr, AccessType access);
+
+/*
+* Perform a write to CPU memory.
+* This function should be used to write to the CPU's memory while the CPU is halted
+* in order to update the CPU cycle counter and debug information.
+*
+* @param addr The memory address to write to
+* @param data The value to write to memory at the given address
+* @param access Indicates the memory access type for the debugger
+*/
+void CPU_Write(CPU *cpu, uint16_t addr, uint8_t data, AccessType access);
 
 
 /*

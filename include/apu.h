@@ -7,8 +7,13 @@
 #define APU_SAMPLE_CAPACITY 1024 //Max number of samples in buffer
 
 
-//Callback to schedule a DMC DMA in the CPU
-typedef void(*APU_DMCDMAFn)(void* fndata, uint16_t addr);
+//Callback to schedule a DMC DMA
+typedef void(*APUDMAFn)(void *context, uint16_t addr);
+
+typedef struct {
+    void *context;
+    APUDMAFn ondma;
+} APUCallbacks;
 
 
 static const uint8_t APU_LENGTH_TABLE[32] = {
@@ -157,8 +162,7 @@ typedef struct {
 
 
 typedef struct {
-    APU_DMCDMAFn dmcdma_fn;
-    void* fndata;
+    APUCallbacks callbacks;
 
     APUState state;
 
@@ -176,7 +180,7 @@ typedef struct {
 /*
 * Initialize APU struct. The CPU clock speed is needed to determine the number of CPU cycles per output sample.
 */
-void APU_Init(APU* apu, APU_DMCDMAFn dmcdma_fn, void* fndata, double cpuClockMHz, double sampleRateHz);
+void APU_Init(APU* apu, APUCallbacks callbacks, double cpuClockMHz, double sampleRateHz);
 void APU_PowerOn(APU* apu);
 void APU_Reset(APU* apu);
 
@@ -188,7 +192,7 @@ void APU_CPUCycle(APU* apu);
 void* APU_GetAudioBuffer(APU* apu, size_t* len);
 void APU_ClearAudioBuffer(APU* apu);
 
-//Load the DMC sample buffer with a DPCM sample byte. For use by the CPU in DMC DMA transfers.
+//Load the DMC sample buffer with a DPCM sample byte. For use in DMC DMA transfers.
 void APU_DMCLoadSample(APU* apu, uint8_t sampleData);
 
 //Get the output volume of an APU channel. Volume is a value between 0.0 and 1.0.

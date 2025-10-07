@@ -7,8 +7,8 @@
 #include "cpu.h"
 #include "ppu.h"
 #include "apu.h"
+#include "dma.h"
 #include "standard_controller.h"
-#include "mapper.h"
 
 
 typedef struct {
@@ -43,13 +43,13 @@ typedef enum {
 typedef DebugStepType(*DebugPauseCallback)(void*);
 
 
-struct Emulator {
+typedef struct {
     INESHeader rom_ines;
-    Mapper_Base* mapper;
     CPU cpu;
     PPU ppu;
     APU apu;
     StandardController controller;
+    DMAController dma;
 
     Memory memory;
 
@@ -67,7 +67,7 @@ struct Emulator {
     DebugStepType debug_step;
 
     Vec_Breakpoint breakpoints;
-};
+} Emulator;
 
 Emulator* Emu_Create();
 

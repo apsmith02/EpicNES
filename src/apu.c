@@ -9,11 +9,10 @@ void _APU_WriteLength(APULength* length, uint8_t reg_data) {
 }
 
 
-void APU_Init(APU *apu, APU_DMCDMAFn dmcdma_fn, void* fndata, double cpuClockMHz, double sampleRateHz)
+void APU_Init(APU* apu, APUCallbacks callbacks, double cpuClockMHz, double sampleRateHz)
 {
     memset(apu, 0, sizeof(APU));
-    apu->dmcdma_fn = dmcdma_fn;
-    apu->fndata = fndata;
+    apu->callbacks = callbacks;
     apu->cpuCyclesPerSample = (cpuClockMHz * 1000000) / sampleRateHz;
 
     for (int i = 0; i < APU_NUM_VOL_SETTINGS; i++)
@@ -435,7 +434,7 @@ void _APUDMC_Clock(APU* apu)
     //Memory reader sample buffer load
     if (!dmc->sample_buffer_full && dmc->bytes_remaining > 0) {
         //Schedule a DMC DMA. When the DMC DMA transfers the sample data, the rest of the memory reader load logic is done in APU_DMCLoadSample().
-        apu->dmcdma_fn(apu->fndata, dmc->cur_addr);
+        apu->callbacks.ondma(apu->callbacks.context, dmc->cur_addr);
     }
 }
 

@@ -35,7 +35,11 @@ void test_CPU_PowerOn() {
     ram[0xFFFC] = 0xCD;
     ram[0xFFFD] = 0xAB;
 
-    CPU_Init(&cpu, &ram_read, &ram_write, ram);
+    CPU_Init(&cpu, (CPUCallbacks){
+        .context = &ram,
+        .onread = ram_read,
+        .onwrite = ram_write
+    });
     CPU_PowerOn(&cpu);
     assert_cpu_regs(&cpu.state, 0xABCD, 0, 0, 0, 0xFD, 0x24);
 }
@@ -45,7 +49,11 @@ void test_LDAimm()
     CPU cpu;
     RAM64k ram = {0xA9, 0xCD};
 
-    CPU_Init(&cpu, &ram_read, &ram_write, ram);
+    CPU_Init(&cpu, (CPUCallbacks){
+        .context = &ram,
+        .onread = ram_read,
+        .onwrite = ram_write
+    });
     cpu.state = (CPUState){
         .pc = 0x0000,
         .a = 0x00,

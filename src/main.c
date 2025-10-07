@@ -4,7 +4,6 @@
 #include <string.h>
 #include <math.h>
 #include "emulator.h"
-#include "console_debug.h"
 #include "sdl_audio_buffer.h"
 
 //Remove quotes from filename
@@ -47,9 +46,6 @@ int main(int argc, char** argv){
     //Load ROM
     if (Emu_LoadROM(emulator, rompath) != 0)
         return -1;
-    //Set up debugger
-    Emu_SetDebugPauseCallback(emulator, &ConsoleDebugCallback, (void*)emulator);
-    Emu_DebugEnable(emulator, true);
 
     // Initialize SDL2
     

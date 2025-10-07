@@ -15,54 +15,35 @@ typedef enum {
 
 /* PRIVATE FUNCTIONS */
 
-//If there is a pending DMC DMA transfer, start it
-static void StartDMCDMA(CPU* cpu, uint16_t dummyAddr);
-
-static uint8_t _Read(CPU* cpu, uint16_t addr, AccessType access) {
-    StartDMCDMA(cpu, addr);
-
-    cpu->instr_cycle++;
-    cpu->access_type = access;
-
-    cpu->state.cycles++;
-
-    return cpu->readfn(cpu->fndata, addr);
-}
-
-static void _Write(CPU* cpu, uint16_t addr, uint8_t data, AccessType access) {
-    cpu->instr_cycle++;
-    cpu->access_type = access;
-
-    cpu->state.cycles++;
-
-    cpu->writefn(cpu->fndata, addr, data);
-
-    if (addr == 0x4014) {
-        //$4014: OAMDMA
-        cpu->oamdma = true;
-        cpu->oamdma_page = data;
+static void ProcessHalt(CPU *cpu, uint16_t nextAddr) {
+    if (cpu->halt) {
+        cpu->halt = false;
+        cpu->callbacks.onhalt(cpu->callbacks.context, cpu, nextAddr);
     }
 }
 
+//Read, and process pending halt before reading
 static uint8_t Read(CPU* cpu, uint16_t addr) {
-    return _Read(cpu, addr, ACCESS_READ);
+    ProcessHalt(cpu, addr);
+    return CPU_Read(cpu, addr, ACCESS_READ);
 }
 
 static void Write(CPU* cpu, uint16_t addr, uint8_t data) {
-    _Write(cpu, addr, data, ACCESS_WRITE);
+    CPU_Write(cpu, addr, data, ACCESS_WRITE);
 }
 
 static uint8_t DummyRead(CPU* cpu, uint16_t addr) {
-    return _Read(cpu, addr, ACCESS_DUMMY_READ);
+    ProcessHalt(cpu, addr);
+    return CPU_Read(cpu, addr, ACCESS_DUMMY_READ);
 }
 
 static void DummyWrite(CPU* cpu, uint16_t addr, uint8_t data) {
-    _Write(cpu, addr, data, ACCESS_DUMMY_WRITE);
+    CPU_Write(cpu, addr, data, ACCESS_DUMMY_WRITE);
 }
 
 static uint8_t Peek(CPU* cpu, uint16_t addr) {
-    assert(cpu->peekfn != NULL);
-    return cpu->peekfn(cpu->fndata, addr);
+    assert(cpu->callbacks.onpeek != NULL);
+    return cpu->callbacks.onpeek(cpu->callbacks.context, addr);
 }
 
 //Does not handle page boundary crossing (the high byte will always be fetched from the same page as the low byte)
@@ -72,7 +53,7 @@ static uint16_t ReadWord(CPU* cpu, uint16_t addr) {
 
 //Fetch opcode, increment pc. Use to fetch with execute access type.
 static uint8_t FetchOpcode(CPU* cpu) {
-    uint8_t val = _Read(cpu, cpu->state.pc, ACCESS_EXECUTE);
+    uint8_t val = CPU_Read(cpu, cpu->state.pc, ACCESS_EXECUTE);
     cpu->state.pc++;
     return val;
 }
@@ -173,24 +154,6 @@ static void Branch(CPU* cpu, int takeBranch);
 *  TODO: Implement interrupt hijacking.
 */
 static void HandleInterrupt(CPU* cpu, InterruptType interrupt);
-
-
-static void StartDMCDMA(CPU* cpu, uint16_t dummyAddr) {
-    if (cpu->dmcdma) {
-        cpu->dmc_halt = true; //Set DMC halt flag so CPU_DMCDMA() doesn't set dmcdma flag during DMA
-        cpu->dmcdma = false;
-        
-        DummyRead(cpu, dummyAddr); //Halt cycle
-        DummyRead(cpu, dummyAddr); //Dummy cycle
-        if (cpu->state.cycles % 2 == 1)
-            DummyRead(cpu, dummyAddr); //Odd cycle: Alignment cycle
-        
-        assert(cpu->dmcloadfn != NULL);
-        cpu->dmcloadfn(cpu->fndata, Read(cpu, cpu->dmcdma_addr)); //DMA transfer cycle
-
-        cpu->dmc_halt = false;
-    }
-}
 
 /* OPCODES */
 
@@ -297,21 +260,9 @@ static const AddrMode ADDRMODE_TABLE[256] = {
 
 /* PUBLIC FUNCTION DEFINITIONS */
 
-void CPU_Init(CPU* cpu, CPUReadFn readfn, CPUWriteFn writefn, void* fndata) {
+void CPU_Init(CPU *cpu, CPUCallbacks callbacks) {
     memset(cpu, 0, sizeof(CPU));
-    cpu->readfn = readfn;
-    cpu->writefn = writefn;
-    cpu->fndata = fndata;
-}
-
-void CPU_SetPeekFn(CPU *cpu, CPUPeekFn peekfn)
-{
-    cpu->peekfn = peekfn;
-}
-
-void CPU_SetDMCLoadFn(CPU *cpu, CPU_DMCLoadFn dmcloadfn)
-{
-    cpu->dmcloadfn = dmcloadfn;
+    cpu->callbacks = callbacks;
 }
 
 void CPU_PowerOn(CPU *cpu)
@@ -358,26 +309,6 @@ int CPU_Exec(CPU *cpu)
     //Execute instruction
     opcodeFn(cpu, ADDRMODE_TABLE[opcode]);
 
-
-    //Begin OAM DMA
-    if (cpu->oamdma) {
-        DummyRead(cpu, state->pc); //Halt cycle
-        if (state->cycles % 2 == 1) {
-            DummyRead(cpu, state->pc); //Odd cycles: Alignment cycle
-        }
-
-        uint16_t addr = (uint16_t)cpu->oamdma_page << 8;
-        for (int i = 0; i < 256; i++, addr++) {
-            uint8_t data = Read(cpu, addr);
-            Write(cpu, 0x2004, data);
-        }
-
-        cpu->oamdma = false;
-    }
-    //DMC DMA
-    StartDMCDMA(cpu, state->pc);
-
-
     //Handle interrupts
     if (state->nmi) {
         if (cpu->log)
@@ -386,6 +317,9 @@ int CPU_Exec(CPU *cpu)
         HandleInterrupt(cpu, IR_NMI);
         state->nmi = 0;
     }
+
+    //Process pending halt before next instruction
+    ProcessHalt(cpu, state->pc);
     
     cpu->instr_cycle = 0;
     return 0;
@@ -393,11 +327,24 @@ int CPU_Exec(CPU *cpu)
 
 void CPU_NMI(CPU *cpu) { cpu->state.nmi = 1; }
 
-void CPU_DMCDMA(CPU* cpu, uint16_t addr) {
-    if (!cpu->dmc_halt) {
-        cpu->dmcdma = true;
-        cpu->dmcdma_addr = addr;
-    }
+void CPU_ScheduleHalt(CPU *cpu) { cpu->halt = true; }
+
+uint8_t CPU_Read(CPU *cpu, uint16_t addr, AccessType access)
+{
+    cpu->state.cycles++;
+    cpu->instr_cycle++;
+    cpu->access_type = access;
+
+    return cpu->callbacks.onread(cpu->callbacks.context, addr);
+}
+
+void CPU_Write(CPU *cpu, uint16_t addr, uint8_t data, AccessType access)
+{
+    cpu->state.cycles++;
+    cpu->instr_cycle++;
+    cpu->access_type = access;
+
+    cpu->callbacks.onwrite(cpu->callbacks.context, addr, data);
 }
 
 int CPU_Disassemble(CPU *cpu, uint16_t instr_addr, char *buffer, size_t n)

@@ -23,10 +23,10 @@ void MapNTVertical(Emulator* emu) {
     Mem_PPUMapPages(&emu->memory, 0x2C, 0x2F, MEM_VRAM, 0x04);
 }
 
+
 uint8_t OnCPURead(void* emulator, uint16_t addr) {
     Emulator* emu = (Emulator*)emulator;
     Memory* memory = &emu->memory;
-    Mapper_Base* mapper = emu->mapper;
 
     //Debug: Break on step or breakpoint hit, flag opcodes on opcode fetch
     if (emu->debug_enable) {
@@ -48,7 +48,7 @@ uint8_t OnCPURead(void* emulator, uint16_t addr) {
 
     bool iNmi = PPU_NMISignal(&emu->ppu);
 
-    uint8_t data = mapper->vtable->cpuRead(mapper, emu, addr);
+    uint8_t data = Mem_CPURead(memory, addr);
 
     APU_CPUCycle(&emu->apu);
     PPU_Cycle(&emu->ppu);
@@ -63,7 +63,6 @@ uint8_t OnCPURead(void* emulator, uint16_t addr) {
 void OnCPUWrite(void* emulator, uint16_t addr, uint8_t data) {
     Emulator* emu = (Emulator*)emulator;
     Memory* memory = &emu->memory;
-    Mapper_Base* mapper = emu->mapper;
 
     //Debug: Break on step or breakpoint hit
     if (emu->debug_enable) {
@@ -77,7 +76,7 @@ void OnCPUWrite(void* emulator, uint16_t addr, uint8_t data) {
 
     bool iNmi = PPU_NMISignal(&emu->ppu);
     
-    mapper->vtable->cpuWrite(mapper, emu, addr, data);
+    Mem_CPUWrite(memory, addr, data);
 
     APU_CPUCycle(&emu->apu);
     PPU_Cycle(&emu->ppu);
@@ -93,8 +92,9 @@ uint8_t OnCPUPeek(void* emulator, uint16_t addr) {
     return Mem_CPUPeek(&emu->memory, addr);
 }
 
-void OnCPUDMCLoad(Emulator* emu, uint8_t sampleData) {
-    APU_DMCLoadSample(&emu->apu, sampleData);
+void OnCPUHalt(void *emulator, CPU *cpu, uint16_t nextAddr) {
+    Emulator* emu = (Emulator*)emulator;
+    DMA_Process(&emu->dma, &emu->cpu, &emu->apu, nextAddr);
 }
 
 uint8_t OnPPURead(void* emulator, uint16_t addr) {
@@ -105,6 +105,17 @@ uint8_t OnPPURead(void* emulator, uint16_t addr) {
 void OnPPUWrite(void* emulator, uint16_t addr, uint8_t data) {
     Emulator* emu = (Emulator*)emulator;
     Mem_PPUWrite(&emu->memory, addr, data);
+}
+
+void OnDMCDMA(void *emulator, uint16_t addr) {
+    Emulator *emu = (Emulator*)emulator;
+    DMA_ScheduleDMCDMA(&emu->dma, &emu->cpu, addr);
+}
+
+
+//Write $4014: Schedule OAM DMA
+void Write4014(Emulator *emu, uint16_t addr, uint8_t data) {
+    DMA_ScheduleOAMDMA(&emu->dma, &emu->cpu, data);
 }
 
 //Write $4016: Controller strobe
@@ -169,14 +180,21 @@ Emulator *Emu_Create()
     
     Mem_Init(&emu->memory);
 
-    CPU_Init(&emu->cpu, &OnCPURead, &OnCPUWrite, emu);
-    CPU_SetPeekFn(&emu->cpu, &OnCPUPeek);
-    CPU_SetDMCLoadFn(&emu->cpu, (CPU_DMCLoadFn)&OnCPUDMCLoad);
+    CPU_Init(&emu->cpu, (CPUCallbacks){
+        .context = emu,
+        .onread = &OnCPURead,
+        .onwrite = &OnCPUWrite,
+        .onpeek = &OnCPUPeek,
+        .onhalt = &OnCPUHalt
+    });
 
     PPU_Init(&emu->ppu, &OnPPURead, &OnPPUWrite, emu);
 
-    APU_Init(&emu->apu, &CPU_DMCDMA, &emu->cpu, NTSC_CPU_CLOCK, 44100);
-
+    APU_Init(&emu->apu, (APUCallbacks){
+        .context = emu,
+        .ondma = &OnDMCDMA,
+    }, NTSC_CPU_CLOCK, 44100);
+    
     StdController_Init(&emu->controller);
 
     Vec_BP_Init(&emu->breakpoints);
@@ -198,6 +216,9 @@ Emulator *Emu_Create()
     Mem_CPUMapWriteDevice(memory, 0x4000, 0x4013, &emu->apu, (CPUWriteFn)&APU_Write);
     Mem_CPUMapWriteDevice(memory, 0x4015, 0x4015, &emu->apu, (CPUWriteFn)&APU_Write);
     Mem_CPUMapWriteDevice(memory, 0x4017, 0x4017, &emu->apu, (CPUWriteFn)&APU_Write);
+
+    //OAM DMA: Write $4014
+    Mem_CPUMapWriteDevice(memory, 0x4014, 0x4014, emu, (CPUWriteFn)&Write4014);
 
     //Controller Strobe: Write $4016
     Mem_CPUMapWriteDevice(memory, 0x4016, 0x4016, emu, (CPUWriteFn)&Write4016);
@@ -243,15 +264,7 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
     }
     Mem_Load_CHR_ROM(memory, ines, rom_file);
     fclose(rom_file);
-
-    const Mapper_Vtable* mapper_vtbl;
-    if (ines->mapper >= NUM_MAPPERS || (mapper_vtbl = MAPPER_VTABLES[ines->mapper]) == NULL) {
-        fprintf(stderr, "Error: This ROM uses mapper %u, which is not supported by this emulator.\n", ines->mapper);
-        return -1;
-    }
-    emu->mapper = Mapper_CreateFromVtable(mapper_vtbl, emu);
     
-    /*
     //Check mapper
     if (ines->mapper == 0) { //NROM
         //Create VRAM
@@ -274,7 +287,6 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
         Emu_CloseROM(emu);
         return -1;
     }
-    */
     
     emu->is_rom_loaded = 1;
 
@@ -287,8 +299,6 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
 void Emu_CloseROM(Emulator *emu)
 {
     emu->is_rom_loaded = 0;
-    Mapper_Destroy(emu->mapper, emu);
-    emu->mapper = NULL;
 }
 
 int Emu_IsROMLoaded(Emulator *emu)

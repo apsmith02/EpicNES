@@ -5,11 +5,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-int main() {
+int main(int argc, char** argv) {
+    // Command line args
+    bool no_illegal = false; //command line argument: --no-illegal flag
+    if (argc > 1) {
+        if (!strcmp(argv[1], "--no-illegal")) {
+            no_illegal = true;
+        } else {
+            printf("Invalid argument %s\n", argv[1]);
+            printf("Usage:\nnestest <args...>\nValid arguments:\n--no-illegal : Do not test illegal opcodes\n");
+            return 1;
+        }
+    }
+
+    //Initialize CPU and RAM
     CPU cpu;
     RAMLog ram;
     ramlog_init(&ram, 10);
-    CPU_Init(&cpu, &ramlog_read, &ramlog_write, &ram);
+    CPU_Init(&cpu, (CPUCallbacks){
+        .context = &ram,
+        .onread = &ramlog_read,
+        .onwrite = &ramlog_write
+    });
 
     //Load ROM
     ROM rom;
@@ -43,13 +60,23 @@ int main() {
         uint8_t a, x, y, s, p;
         unsigned long long cycles;
         char buf[256];
-
+        
         strncpy(buf, line, 256);
 
         //Extract expected state from log line
         char* col = strtok(buf, " ");
         pc = strtol(col, NULL, 16);
         do {
+            /*If not testing illegal opcodes and
+            * the next logged instruction is an illegal opcode (which starts with an asterisk),
+            * end testing early and consider the official opcode tests passed.
+            */
+            if (no_illegal && col[0] == '*') {
+                printf("All tests before the illegal opcode tests pass.\nTo test illegal opcodes, remove the --no-illegal flag.\n");
+                exit(0);
+            }
+
+            //Parse register values
             if          (!strncmp(col, "A:", 2)) {
                 a = strtol(col + 2, NULL, 16);
             } else if   (!strncmp(col, "X:", 2)) {
