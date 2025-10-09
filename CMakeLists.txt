@@ -4,8 +4,9 @@ project(EpicNES VERSION 0.1.0 LANGUAGES C)
 
 # ==== MAIN PROJECT ====
 
-include_directories("${PROJECT_SOURCE_DIR}/include")
-add_executable(${PROJECT_NAME} src/main.c src/emulator.c src/rom.c src/cpu.c src/ppu.c src/standard_controller.c src/apu.c src/memory.c src/dma.c
+include_directories("${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/include/mapper")
+add_executable(${PROJECT_NAME} src/main.c src/emulator.c src/rom.c src/cpu.c src/ppu.c src/standard_controller.c src/apu.c src/dma.c
+src/mapper/mapper_base.c src/mapper/nrom.c src/mapper/uxrom.c
 src/ring_buffer.c src/sdl_audio_buffer.c)
 
 

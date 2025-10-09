@@ -29,13 +29,16 @@ int main(int argc, char** argv) {
     });
 
     //Load ROM
-    ROM rom;
-    if (ROM_Load(&rom, "nestest.nes") != 0) {
-        printf("Error loading nestest.nes.\n");
-        return 1;
+    FILE* romFile;
+    if ((romFile = fopen("nestest.nes", "rb")) == NULL) {
+        perror("Error opening file nestest.nes");
     }
-
-    memcpy(ram.ram + 0xC000, rom.prg_rom, 16384);
+    INESHeader ines;
+    if (INES_ReadHeader(&ines, romFile)) {
+        fprintf(stderr, "Error reading nestest.nes: Invalid iNES ROM file format.\n");
+    }
+    char *prg = INES_ReadPRG(&ines, romFile);
+    memcpy(ram.ram + 0xC000, prg, ines.prg_bytes);
 
     //The reset vector for nestest.nes on "automation" is $C000.
     ram.ram[0xFFFC] = 0x00;

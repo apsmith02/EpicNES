@@ -149,8 +149,6 @@ int main(int argc, char** argv){
                                     max_fps = 60;
                             }
                             break;
-                        case SDL_SCANCODE_GRAVE: //~: Debug pause
-                            Emu_DebugPause(emulator); break;
                         case SDL_SCANCODE_ESCAPE:   running = false; break;
                         
                         case SDL_SCANCODE_F6: //F6: Toggle Pulse 1 mute
@@ -221,7 +219,7 @@ int main(int argc, char** argv){
         size_t iLen = len;
         SDLAudioBuffer_QueueAudio(audioBuffer, emuAudio, &len);
         Emu_ClearAudioBuffer(emulator);
-
+        
         //Limit FPS
         Uint32 fps;
         Uint32 msPerFrame = 1000 / max_fps;

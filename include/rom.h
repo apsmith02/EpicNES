@@ -3,30 +3,6 @@
 
 #include <stdio.h>
 
-//Deprecated; use INESHeader
-typedef struct {
-    char header[16];
-
-    unsigned prg_units; //Size of PRG ROM in 16KB units
-    unsigned chr_units; //Size of CHR ROM in 8KB units
-    unsigned prg_bytes; //Size of PRG ROM in bytes
-    unsigned chr_bytes; //Size of CHR ROM in bytes
-
-    int nt_mirroring;   //Nametable mirroring. 0: horizontal, 1: vertical
-    int nt_alt;         //1: Alternative nametable layout
-    int trainer;        //1: 512-byte trainer before PRG data
-    unsigned mapper;    //Mapper number
-
-    char* prg_rom;
-    char* chr_rom;
-} ROM;
-
-//Returns 0 on success, -1 on error.
-int ROM_Load(ROM* rom, const char* filename);
-
-void ROM_Destroy(ROM* rom);
-
-
 /*
 * iNES ROM file format header. Contains information on PRG/CHR ROM sizes, mapper, nametable mirroring, etc.
 *
@@ -60,14 +36,14 @@ int INES_ReadHeader(INESHeader* ines, FILE* rom_file);
 * The caller is responsible for freeing the memory with free().
 */
 
-char* INES_ReadPRG(INESHeader* ines, FILE* rom_file);
+char* INES_ReadPRG(const INESHeader* ines, FILE* rom_file);
 /**
 * Read CHR ROM data from INES ROM file. Must initialize header using INES_ReadHeader() first to locate CHR ROM.
 *
 * @return Memory the size of header->chr_bytes allocated with malloc() containing CHR ROM data.
 * The caller is responsible for freeing the memory with free().
 */
-char* INES_ReadCHR(INESHeader* ines, FILE* rom_file);
+char* INES_ReadCHR(const INESHeader* ines, FILE* rom_file);
 
 
 #endif
