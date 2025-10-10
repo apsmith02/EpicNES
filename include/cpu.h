@@ -103,9 +103,6 @@ typedef struct {
     CPUHaltFn onhalt; //Called when the CPU is halted. Use this to implement DMAs.
 } CPUCallbacks;
 
-//DMC DMA transfer callback
-typedef void(*CPU_DMCLoadFn)(void* fndata, uint8_t sampleData);
-
 struct CPU {
     //Callback functions
     CPUCallbacks callbacks;

@@ -491,46 +491,11 @@ void FetchSprPattern(PPU *ppu, bool msbp) {
 void FetchSprLsb(PPU *ppu)
 {
     FetchSprPattern(ppu, 0);
-    /*
-    PPUState* state = &ppu->state;
-    
-    int sprIndex = (state->cycle - 257) / 8;
-    if (sprIndex < state->secondaryOamCount) {
-        OAMSprite* sprite = &state->secondaryOam[sprIndex];
-
-        int yOffset = state->scanline - sprite->y;
-        if (sprite->attributes & OAMATTR_FLIP_V)
-            yOffset = 7 - yOffset;
-        uint16_t addr =
-            yOffset |                                           //fine y offset
-            (uint16_t)sprite->tile << 4 |                       //tile number
-            ((state->ppuctrl & PPUCTRL_SPRTABLE) ? 0x1000 : 0); //half of pattern table
-        state->sprPattern0[sprIndex] = Read(ppu, addr);
-    }
-    */
 }
 
 void FetchSprMsb(PPU *ppu)
 {
     FetchSprPattern(ppu, 1);
-    /*
-    PPUState* state = &ppu->state;
-
-    int sprIndex = (state->cycle - 257) / 8;
-    if (sprIndex < state->secondaryOamCount) {
-        OAMSprite* sprite = &state->secondaryOam[sprIndex];
-
-        int yOffset = state->scanline - sprite->y;
-        if (sprite->attributes & OAMATTR_FLIP_V)
-            yOffset = 7 - yOffset;
-        uint16_t addr =
-            yOffset |                                           //fine y offset
-            0x8 |                                               //msb bit plane
-            (uint16_t)sprite->tile << 4 |                       //tile number
-            ((state->ppuctrl & PPUCTRL_SPRTABLE) ? 0x1000 : 0); //half of pattern table
-        state->sprPattern1[sprIndex] = Read(ppu, addr);
-    }
-    */
 }
 
 void QuickSpriteEval(PPU *ppu)
