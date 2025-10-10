@@ -446,10 +446,54 @@ void FetchBGmsb(PPU *ppu)
     ppu->state.bgPattern1 = Read(ppu, addr);
 }
 
-void FetchSprLsb(PPU *ppu)
-{
+void FetchSprPattern(PPU *ppu, bool msbp) {
     PPUState* state = &ppu->state;
 
+    int sprIndex = (state->cycle - 257) / 8;
+    
+    if (sprIndex < state->secondaryOamCount) {
+        OAMSprite* sprite = &state->secondaryOam[sprIndex];
+        
+        int yOffset = state->scanline - sprite->y;
+        if (sprite->attributes & OAMATTR_FLIP_V)
+            yOffset = 7 - yOffset;
+            yOffset %= 8;
+
+        uint16_t addr;
+        if (!(state->ppuctrl & PPUCTRL_SPRSIZE)) {
+            //8x8 sprite
+            addr =
+                yOffset |                                           //fine y offset
+                (msbp ? 0x8 : 0) |                                  //bit plane
+                (uint16_t)sprite->tile << 4 |                       //tile number
+                ((state->ppuctrl & PPUCTRL_SPRTABLE) ? 0x1000 : 0); //half of pattern table
+        } else {
+            //8x16 sprite
+            uint8_t tile = sprite->tile & 0xFE;
+            if ((!(sprite->attributes & OAMATTR_FLIP_V) && (state->scanline - sprite->y) >= 8) ||
+                ((sprite->attributes & OAMATTR_FLIP_V) && (state->scanline - sprite->y) < 8))
+            {
+                tile++;
+            }
+            addr =
+                yOffset |                               //fine y offset
+                (msbp ? 0x8 : 0) |                      //bit plane
+                tile << 4 |                             //tile number
+                ((sprite->tile & 0x1) ? 0x1000 : 0);    //half of pattern table
+        }
+        if (!msbp)
+            state->sprPattern0[sprIndex] = Read(ppu, addr);
+        else
+            state->sprPattern1[sprIndex] = Read(ppu, addr);
+    }
+}
+
+void FetchSprLsb(PPU *ppu)
+{
+    FetchSprPattern(ppu, 0);
+    /*
+    PPUState* state = &ppu->state;
+    
     int sprIndex = (state->cycle - 257) / 8;
     if (sprIndex < state->secondaryOamCount) {
         OAMSprite* sprite = &state->secondaryOam[sprIndex];
@@ -463,10 +507,13 @@ void FetchSprLsb(PPU *ppu)
             ((state->ppuctrl & PPUCTRL_SPRTABLE) ? 0x1000 : 0); //half of pattern table
         state->sprPattern0[sprIndex] = Read(ppu, addr);
     }
+    */
 }
 
 void FetchSprMsb(PPU *ppu)
 {
+    FetchSprPattern(ppu, 1);
+    /*
     PPUState* state = &ppu->state;
 
     int sprIndex = (state->cycle - 257) / 8;
@@ -483,6 +530,7 @@ void FetchSprMsb(PPU *ppu)
             ((state->ppuctrl & PPUCTRL_SPRTABLE) ? 0x1000 : 0); //half of pattern table
         state->sprPattern1[sprIndex] = Read(ppu, addr);
     }
+    */
 }
 
 void QuickSpriteEval(PPU *ppu)
@@ -498,7 +546,7 @@ void QuickSpriteEval(PPU *ppu)
     state->scanlineHasSpr0 = false;
     //Iterate over OAM, add first 8 sprites in range of scanline to secondary OAM
     for (int i = 0; i < 64 && state->secondaryOamCount < 8; i++) {
-        if (state->oamSprites[i].y <= state->scanline && state->scanline < state->oamSprites[i].y + 8) {
+        if (state->oamSprites[i].y <= state->scanline && state->scanline < state->oamSprites[i].y + ((state->ppuctrl & PPUCTRL_SPRSIZE) ? 16 : 8)) {
             state->secondaryOam[state->secondaryOamCount++] = state->oamSprites[i];
             if (i == 0)
                 state->scanlineHasSpr0 = true;

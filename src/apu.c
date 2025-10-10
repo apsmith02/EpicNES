@@ -41,14 +41,16 @@ uint8_t APU_Read(APU *apu, uint16_t addr)
 {
     APUState* state = &apu->state;
     if (addr == 0x4015) {
-        return
-        (state->ch_pulse1.length.counter > 0)        |
+        uint8_t ret = (state->ch_pulse1.length.counter > 0) |
         (state->ch_pulse2.length.counter > 0)   << 1 |
         (state->ch_triangle.length.counter > 0) << 2 |
         (state->ch_noise.length.counter > 0)    << 3 |
         (state->ch_dmc.bytes_remaining > 0)     << 4 |
         (state->fc_irq)                         << 6 |
         (state->ch_dmc.irq)                     << 7;
+
+        state->fc_irq = false;
+        return ret;
     }
     return 0;
 }
@@ -69,7 +71,10 @@ void APU_Write(APU *apu, uint16_t addr, uint8_t data)
             state->ch_triangle.length.halt = data >> 7;
             state->ch_triangle.linear_reload_value = data & 0x7F;
             break;
-        case 0x400A: state->ch_triangle.period = data; break;
+        case 0x400A:
+            state->ch_triangle.period &= 0xF00;
+            state->ch_triangle.period |= data;
+            break;
         case 0x400B:
             state->ch_triangle.period &= 0x00FF;
             state->ch_triangle.period |= (data & 0x07) << 8;
@@ -115,6 +120,9 @@ void APU_Write(APU *apu, uint16_t addr, uint8_t data)
             break;
         case 0x4017:
             state->fc_ctrl = data;
+            //If the interrupt inhibit flag is set, the frame interrupt flag is lceared
+            if (data & FC_IRQ_INHIBIT)
+                state->fc_irq = false;
             //Side effects: Reset FC timer, and if the 5-step flag is set, generate quarter and half frame signals
             state->fc_cycles = 0;
             if (data & FC_5STEP) {
@@ -270,6 +278,8 @@ void _APU_FC_Clock(APU *apu)
             case 29829: //Step 4 at 14914.5 APU cycles
                 _APU_FC_ClockQuarterFrame(apu);
                 _APU_FC_ClockHalfFrame(apu);
+                if (!(state->fc_ctrl & FC_IRQ_INHIBIT))
+                    state->fc_irq = true;
                 break;
             default: break;
         }
@@ -475,13 +485,14 @@ void _APUPulse_Write1(APUPulse *pulse, uint8_t data)
 
 void _APUPulse_Write2(APUPulse *pulse, uint8_t data)
 {
-    pulse->period = data;
+    pulse->period &= 0xF00;
+    pulse->period |= data;
 }
 
 void _APUPulse_Write3(APUPulse *pulse, uint8_t data)
 {
     pulse->period &= 0x0FF;
-    pulse->period |= (data << 8) & 0x700;
+    pulse->period |= ((uint16_t)data << 8) & 0x700;
     _APU_WriteLength(&pulse->length, data);
     pulse->envelope.start = true;
     pulse->duty_pos = 0;
