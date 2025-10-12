@@ -21,6 +21,7 @@ int INES_ReadHeader(INESHeader *ines, FILE *rom_file)
     
     //Byte 6: Mapper, mirroring, battery, trainer
     ines->nt_mirroring  = ines->header[6] & 1;         //Bit 0: NT Mirroring
+    ines->has_battery_saves = ines->header[6] & 2;      //Bit 1: Battery backed PRG RAM (usually at $6000-$7FFF) or other persistent memory
     ines->trainer       = ines->header[6] >> 2 & 1;    //Bit 2: 512-byte trainer before PRG data
     ines->nt_alt        = ines->header[6] >> 3 & 1;    //Bit 3: Alternative NT layout   
     ines->mapper        = ines->header[6] >> 4;        //Bits 4-7: Lower nibble of mapper number

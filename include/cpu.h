@@ -80,9 +80,6 @@ typedef struct {
     
     //Number of cycles run by the CPU since the last power cycle
     unsigned long long cycles;
-
-    int nmi;
-    int irq;
 } CPUState;
 
 typedef struct CPU CPU;
@@ -109,6 +106,9 @@ struct CPU {
 
     //CPU state
     CPUState state;
+    bool nmi; //NMI signal
+    bool irq; //IRQ signal
+    bool nmi_detected; //Set when NMI signal goes from low to high
     bool halt;
 
     //Log file
@@ -142,9 +142,15 @@ void CPU_SoftReset(CPU* cpu);
 int CPU_Exec(CPU* cpu);
 
 /*
-* Schedule an NMI.
+* Set the CPU's NMI signal.
+* NMI is edge-triggered; A transition from low to high (inverted on real hardware) will trigger an NMI.
 */
-void CPU_NMI(CPU* cpu);
+void CPU_SetNMISignal(CPU *cpu, bool nmi);
+
+/*
+* Set the CPU's IRQ signal.
+*/
+void CPU_SetIRQSignal(CPU *cpu, bool irq);
 
 /*
 * Schedule a halt to occur before the next read cycle.

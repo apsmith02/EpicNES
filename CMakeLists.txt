@@ -6,7 +6,7 @@ project(EpicNES VERSION 0.1.0 LANGUAGES C)
 
 include_directories("${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/include/mapper")
 add_executable(${PROJECT_NAME} src/main.c src/emulator.c src/rom.c src/cpu.c src/ppu.c src/standard_controller.c src/apu.c src/dma.c
-src/mapper/mapper_base.c src/mapper/nrom.c src/mapper/uxrom.c
+src/mapper/mapper_base.c src/mapper/nrom.c src/mapper/uxrom.c src/mapper/mmc1.c
 src/ring_buffer.c src/sdl_audio_buffer.c)
 
 

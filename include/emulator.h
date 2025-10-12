@@ -20,12 +20,24 @@ typedef struct {
     MapperBase *mapper;
     uint8_t ram[0x800];
 
+    char save_dir[256];
+
     int is_rom_loaded;
+
+    char save_path[256];
+    FILE *save_file;
 } Emulator;
 
 Emulator* Emu_Create();
 
 void Emu_Free(Emulator* emu);
+
+/**
+* Set the path of the directory to load and save battery saves in.
+* The path must end with a trailing slash (/).
+* The name of the save for a ROM will be <romname>.sav.
+*/
+void Emu_SetSavePath(Emulator *emu, const char* filepath);
 
 /**
 * Load a ROM from a file and power on the console.

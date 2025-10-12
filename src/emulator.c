@@ -21,8 +21,6 @@ void Write4016(Emulator* emu, uint16_t addr, uint8_t data) {
 uint8_t OnCPURead(void* emulator, uint16_t addr) {
     Emulator* emu = (Emulator*)emulator;
 
-    bool iNmi = PPU_NMISignal(&emu->ppu);
-
     uint8_t data = 0;
     if (addr <= 0x1FFF) {
         //RAM
@@ -46,15 +44,14 @@ uint8_t OnCPURead(void* emulator, uint16_t addr) {
     PPU_Cycle(&emu->ppu);
     PPU_Cycle(&emu->ppu);
 
-    if (iNmi && !PPU_NMISignal(&emu->ppu))
-        CPU_NMI(&emu->cpu);
+    CPU_SetNMISignal(&emu->cpu, PPU_NMISignal(&emu->ppu));
+    CPU_SetIRQSignal(&emu->cpu, APU_IRQSignal(&emu->apu));
+
     return data;
 }
 
 void OnCPUWrite(void* emulator, uint16_t addr, uint8_t data) {
     Emulator* emu = (Emulator*)emulator;
-
-    bool iNmi = PPU_NMISignal(&emu->ppu);
     
     if (addr <= 0x1FFF) {
         //RAM
@@ -81,8 +78,8 @@ void OnCPUWrite(void* emulator, uint16_t addr, uint8_t data) {
     PPU_Cycle(&emu->ppu);
     PPU_Cycle(&emu->ppu);
 
-    if (iNmi && !PPU_NMISignal(&emu->ppu))
-        CPU_NMI(&emu->cpu);
+    CPU_SetNMISignal(&emu->cpu, PPU_NMISignal(&emu->ppu));
+    CPU_SetIRQSignal(&emu->cpu, APU_IRQSignal(&emu->apu));
 }
 
 void OnCPUHalt(void *emulator, CPU *cpu, uint16_t nextAddr) {
@@ -113,6 +110,8 @@ Emulator *Emu_Create()
     Emulator* emu = malloc(sizeof(Emulator));
     memset(emu, 0, sizeof(Emulator));
 
+    //Console component initialization
+
     CPU_Init(&emu->cpu, (CPUCallbacks){
         .context = emu,
         .onread = &OnCPURead,
@@ -129,7 +128,7 @@ Emulator *Emu_Create()
     }, NTSC_CPU_CLOCK, 44100);
     
     StdController_Init(&emu->controller);
-    
+
     return emu;
 }
 
@@ -137,6 +136,12 @@ void Emu_Free(Emulator *emu)
 {
     Emu_CloseROM(emu);
     free(emu);
+}
+
+void Emu_SetSavePath(Emulator *emu, const char *filepath)
+{
+    strncpy(emu->save_dir, filepath, sizeof(emu->save_dir));
+    emu->save_dir[sizeof(emu->save_dir) - 1] = '\0';
 }
 
 int Emu_LoadROM(Emulator *emu, const char *filename)
@@ -169,6 +174,38 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
     }
     Mapper_Init(emu->mapper, ines, rom_file);
 
+    //Load PRG RAM save if there is one
+    if (ines->has_battery_saves) {
+        if (emu->save_dir[0] == '\0') {
+            printf("Battery save path is not set, cannot load or save battery saves.\n");
+        } else {
+            strncpy(emu->save_path, emu->save_dir, sizeof(emu->save_path));
+
+            const char *rom_name = strrchr(filename, '/');
+            if (rom_name == NULL)
+                rom_name = filename;
+            else
+                rom_name++;
+            strncat(emu->save_path, rom_name, sizeof(emu->save_path) - 1);
+            
+            char *extension = strrchr(emu->save_path, '.');
+            if (extension != NULL)
+                *extension = '\0';
+            strncat(emu->save_path, ".sav", sizeof(emu->save_path));
+
+            emu->save_file = fopen(emu->save_path, "ab+");
+            if (!emu->save_file) {
+                fprintf(stderr, "Error opening save file ");
+                perror(emu->save_path);
+            } else {
+                if (fseek(emu->save_file, 0, SEEK_SET) != 0) {
+                    perror("Error seeking to beginning of PRG RAM save file");
+                }
+                Mapper_LoadPRGRAM(emu->mapper, emu->save_file);
+            }
+        }
+    }
+
     fclose(rom_file);
     
     emu->is_rom_loaded = 1;
@@ -181,8 +218,22 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
 
 void Emu_CloseROM(Emulator *emu)
 {
-    if (emu->mapper)
+    if (emu->save_file) {
+        fclose(emu->save_file);
+        emu->save_file = fopen(emu->save_path, "wb");
+        if (!emu->save_file) {
+            printf("Error reopening save file ");
+            perror(emu->save_path);
+        } else {
+            Mapper_SavePRGRAM(emu->mapper, emu->save_file);
+            fclose(emu->save_file);
+            emu->save_file = NULL;
+        }
+    }
+    if (emu->mapper) {
         Mapper_Free(emu->mapper);
+        emu->mapper = NULL;
+    }
     emu->is_rom_loaded = 0;
 }
 

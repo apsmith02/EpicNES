@@ -188,6 +188,7 @@ uint8_t APU_Read(APU* apu, uint16_t addr);
 void APU_Write(APU* apu, uint16_t addr, uint8_t data);
 void APU_CPUCycle(APU* apu);
 
+bool APU_IRQSignal(APU *apu);
 
 void* APU_GetAudioBuffer(APU* apu, size_t* len);
 void APU_ClearAudioBuffer(APU* apu);

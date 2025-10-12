@@ -1,10 +1,19 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <SDL.h>
 #include <string.h>
 #include <math.h>
 #include "emulator.h"
 #include "sdl_audio_buffer.h"
+
+#ifdef _WIN32
+    #include <direct.h> // For _mkdir on Windows
+    #define MKDIR(path) _mkdir(path)
+#else
+    #include <sys/stat.h> // For mkdir on POSIX systems
+    #define MKDIR(path) mkdir(path, 0777) // 0777 for permissions
+#endif
 
 //Remove quotes from filename
 void RemoveQuotes(char* buffer, int max) {
@@ -35,20 +44,46 @@ void GetFilename(char* buffer, int max) {
 
 int main(int argc, char** argv){
     char rompath[256];
+    bool logcpu = false;
+    int path_arg_index = 1;
 
-    printf("Enter path to .nes ROM file: ");
-    GetFilename(rompath, sizeof(rompath));
+    //Read command line arguments
+    if (argc > 1 && strcmp(argv[1], "--logcpu") == 0) {
+        logcpu = true;
+        path_arg_index = 2;
+    }
+
+    if (argc > path_arg_index) {
+        strncpy(rompath, argv[path_arg_index], sizeof(rompath) - 1);
+        rompath[sizeof(rompath) - 1] = '\0';
+    } else {
+        printf("Enter path to .nes ROM file: ");
+        GetFilename(rompath, sizeof(rompath));
+    }
     
     // Initialize emulator
     Emulator* emulator = Emu_Create();
+
+    //Log CPU?
+    if (logcpu) {
+        FILE* logfile = fopen("cpu.log", "w");
+        if (logfile) {
+            CPU_SetLogFile(&emulator->cpu, logfile);
+        }
+    }
+
+    //Set default save directory to saves/
+    Emu_SetSavePath(emulator, "saves/");
+    MKDIR("saves/");
+    
     //Configure volume
     APU_SetChannelVolume(&emulator->apu, APU_CH_MASTER, 0.25);
+
     //Load ROM
     if (Emu_LoadROM(emulator, rompath) != 0)
         return -1;
 
     // Initialize SDL2
-    
     SDL_Window* window;
     char window_title[32];
     SDL_Renderer* renderer;
@@ -115,9 +150,10 @@ int main(int argc, char** argv){
 
     Uint32 max_fps = 60;
     bool running = true;
+    bool paused = false;
     while (running) {
         Uint32 start = SDL_GetTicks();
-
+        
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             switch (e.type) {
@@ -147,6 +183,17 @@ int main(int argc, char** argv){
                                     max_fps = 1000;
                                 else
                                     max_fps = 60;
+                            }
+                            break;
+                        case SDL_SCANCODE_P:
+                            if (e.key.keysym.mod & KMOD_CTRL) { //CTRL+P: Pause emulator
+                                if (!paused) {
+                                    paused = true;
+                                    SDL_SetWindowTitle(window, "EpicNES (Paused)");
+                                } else {
+                                    paused = false;
+                                    SDL_SetWindowTitle(window, "EpicNES");
+                                }
                             }
                             break;
                         case SDL_SCANCODE_ESCAPE:   running = false; break;
@@ -201,39 +248,46 @@ int main(int argc, char** argv){
             }
         }
         
-        //Run emulator
-        if (Emu_RunFrame(emulator) != 0)
-            return -1;
-        
-        //Render
-        SDL_RenderClear(renderer);
-        SDL_Rect rect = {0, 0, 0, 0};
-        RGBAPixel* buffer = Emu_GetPixelBuffer(emulator, &rect.w, &rect.h);
-        SDL_UpdateTexture(screen_texture, &rect, buffer, sizeof(*buffer) * rect.w);
-        SDL_RenderCopy(renderer, screen_texture, NULL, &screen_rect);
-        SDL_RenderPresent(renderer);
-        
-        //Queue samples from audio output
-        size_t len;
-        void* emuAudio = Emu_GetAudioBuffer(emulator, &len);
-        size_t iLen = len;
-        SDLAudioBuffer_QueueAudio(audioBuffer, emuAudio, &len);
-        Emu_ClearAudioBuffer(emulator);
-        
-        //Limit FPS
-        Uint32 fps;
-        Uint32 msPerFrame = 1000 / max_fps;
-        Uint32 dt = SDL_GetTicks() - start;
-        if (dt <= msPerFrame) {
-            SDL_Delay(msPerFrame - dt);
-            fps = max_fps;
-        } else
-            fps = (Uint32)(1.0 / ((double)dt / 1000.0));
-        snprintf(window_title, sizeof(window_title), "EpicNES (%u FPS)", fps);
-        SDL_SetWindowTitle(window, window_title);
+        if (!paused) {
+            //Run emulator
+            if (Emu_RunFrame(emulator) != 0)
+                return -1;
+            
+            //Render
+            SDL_RenderClear(renderer);
+            SDL_Rect rect = {0, 0, 0, 0};
+            RGBAPixel* buffer = Emu_GetPixelBuffer(emulator, &rect.w, &rect.h);
+            SDL_UpdateTexture(screen_texture, &rect, buffer, sizeof(*buffer) * rect.w);
+            SDL_RenderCopy(renderer, screen_texture, NULL, &screen_rect);
+            SDL_RenderPresent(renderer);
+            
+            //Queue samples from audio output
+            size_t len;
+            void* emuAudio = Emu_GetAudioBuffer(emulator, &len);
+            size_t iLen = len;
+            SDLAudioBuffer_QueueAudio(audioBuffer, emuAudio, &len);
+            Emu_ClearAudioBuffer(emulator);
+            
+            //Limit FPS
+            Uint32 fps;
+            Uint32 msPerFrame = 1000 / max_fps;
+            Uint32 dt = SDL_GetTicks() - start;
+            if (dt <= msPerFrame) {
+                SDL_Delay(msPerFrame - dt);
+                fps = max_fps;
+            } else
+                fps = (Uint32)(1.0 / ((double)dt / 1000.0));
+            snprintf(window_title, sizeof(window_title), "EpicNES (%u FPS)", fps);
+            SDL_SetWindowTitle(window, window_title);
+        }
     }
 
     printf("Exiting emulator...\n");
+    if (logcpu) {
+        if (emulator->cpu.log) {
+            fclose(emulator->cpu.log);
+        }
+    }
     Emu_Free(emulator);
     SDLAudioBuffer_Free(audioBuffer);
     SDL_DestroyTexture(screen_texture);

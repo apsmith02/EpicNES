@@ -310,12 +310,17 @@ int CPU_Exec(CPU *cpu)
     opcodeFn(cpu, ADDRMODE_TABLE[opcode]);
 
     //Handle interrupts
-    if (state->nmi) {
+    if (cpu->nmi_detected) {
         if (cpu->log)
             fprintf(cpu->log, "NMI\n");
         DummyRead(cpu, state->pc);
         HandleInterrupt(cpu, IR_NMI);
-        state->nmi = 0;
+        cpu->nmi_detected = false;
+    } else if (cpu->irq && !(cpu->state.p & CPU_FLAG_I)) {
+        if (cpu->log)
+            fprintf(cpu->log, "IRQ\n");
+        DummyRead(cpu, state->pc);
+        HandleInterrupt(cpu, IR_IRQ);
     }
 
     //Process pending halt before next instruction
@@ -325,7 +330,14 @@ int CPU_Exec(CPU *cpu)
     return 0;
 }
 
-void CPU_NMI(CPU *cpu) { cpu->state.nmi = 1; }
+void CPU_SetNMISignal(CPU *cpu, bool nmi)
+{
+    if (nmi == true && cpu->nmi == false)
+        cpu->nmi_detected = true;
+    cpu->nmi = nmi;
+}
+
+void CPU_SetIRQSignal(CPU *cpu, bool irq) { cpu->irq = irq; }
 
 void CPU_ScheduleHalt(CPU *cpu) { cpu->halt = true; }
 

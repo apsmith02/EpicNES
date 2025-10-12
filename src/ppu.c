@@ -255,10 +255,9 @@ void PPU_Cycle(PPU *ppu)
 bool PPU_NMISignal(PPU *ppu)
 {
     PPUState* state = &ppu->state;
-    return !(
+    return 
         (state->ppustatus & PPUSTATUS_VBLANK) == PPUSTATUS_VBLANK &&
-        (state->ppuctrl & PPUCTRL_NMI) == PPUCTRL_NMI
-    );
+        (state->ppuctrl & PPUCTRL_NMI) == PPUCTRL_NMI;
 }
 
 void VRAMFetch(PPU *ppu)
@@ -509,12 +508,16 @@ void QuickSpriteEval(PPU *ppu)
     state->secondaryOamCount = 0;
 
     state->scanlineHasSpr0 = false;
-    //Iterate over OAM, add first 8 sprites in range of scanline to secondary OAM
-    for (int i = 0; i < 64 && state->secondaryOamCount < 8; i++) {
-        if (state->oamSprites[i].y <= state->scanline && state->scanline < state->oamSprites[i].y + ((state->ppuctrl & PPUCTRL_SPRSIZE) ? 16 : 8)) {
-            state->secondaryOam[state->secondaryOamCount++] = state->oamSprites[i];
-            if (i == 0)
-                state->scanlineHasSpr0 = true;
+
+    //If scanline 239, don't do sprite evaluation for next scanline or those sprites will be mistakenly drawn to scanline 0 next frame
+    if (state->scanline < 239) {
+        //Iterate over OAM, add first 8 sprites in range of scanline to secondary OAM
+        for (int i = 0; i < 64 && state->secondaryOamCount < 8; i++) {
+            if (state->oamSprites[i].y <= state->scanline && state->scanline < state->oamSprites[i].y + ((state->ppuctrl & PPUCTRL_SPRSIZE) ? 16 : 8)) {
+                state->secondaryOam[state->secondaryOamCount++] = state->oamSprites[i];
+                if (i == 0)
+                    state->scanlineHasSpr0 = true;
+            }
         }
     }
 }

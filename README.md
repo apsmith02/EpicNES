@@ -3,6 +3,7 @@ EpicNES is yet another cycle accurate Nintendo Entertainment System (NES) emulat
 
 This emulator currently supports the following mappers:
 - NROM (Mapper 0)
+- MMC1 (Mapper 1)
 - UxROM (Mapper 2)
 
 ## Dependencies

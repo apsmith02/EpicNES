@@ -22,6 +22,8 @@ typedef struct {
     int nt_alt;         //1: Alternative nametable layout
     int trainer;        //1: 512-byte trainer before PRG data
     unsigned mapper;    //Mapper number
+
+    int has_battery_saves; //1: Cartridge contains battery-backed PRG RAM ($6000-7FFF) or other persistent memory
 } INESHeader;
 
 /**

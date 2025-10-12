@@ -120,7 +120,7 @@ void APU_Write(APU *apu, uint16_t addr, uint8_t data)
             break;
         case 0x4017:
             state->fc_ctrl = data;
-            //If the interrupt inhibit flag is set, the frame interrupt flag is lceared
+            //If the interrupt inhibit flag is set, the frame interrupt flag is cleared
             if (data & FC_IRQ_INHIBIT)
                 state->fc_irq = false;
             //Side effects: Reset FC timer, and if the 5-step flag is set, generate quarter and half frame signals
@@ -148,6 +148,8 @@ void APU_CPUCycle(APU *apu)
     //Clock frame counter
     _APU_FC_Clock(apu);
 }
+
+bool APU_IRQSignal(APU *apu) { return apu->state.fc_irq || apu->state.ch_dmc.irq; }
 
 void *APU_GetAudioBuffer(APU *apu, size_t *len)
 {
@@ -278,7 +280,7 @@ void _APU_FC_Clock(APU *apu)
             case 29829: //Step 4 at 14914.5 APU cycles
                 _APU_FC_ClockQuarterFrame(apu);
                 _APU_FC_ClockHalfFrame(apu);
-                if (!(state->fc_ctrl & FC_IRQ_INHIBIT))
+                if ((state->fc_ctrl & FC_IRQ_INHIBIT) == 0)
                     state->fc_irq = true;
                 break;
             default: break;
@@ -517,7 +519,8 @@ uint8_t _APUPulse_Output(APUPulse *pulse, bool isCh1)
 
 uint8_t _APUTriangle_Output(APUTriangle* tri)
 {
-    if (tri->linear_counter > 0 && tri->length.counter > 0)
+    if (tri->linear_counter > 0 && tri->length.counter > 0 &&
+        tri->period >= 2)
         return TRIANGLE_WAVE[tri->wave_pos];
     return 0;
 }
