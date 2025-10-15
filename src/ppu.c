@@ -455,29 +455,27 @@ void FetchSprPattern(PPU *ppu, bool msbp) {
         
         int yOffset = state->scanline - sprite->y;
         if (sprite->attributes & OAMATTR_FLIP_V)
-            yOffset = 7 - yOffset;
-            yOffset %= 8;
-
+            yOffset = ((state->ppuctrl & PPUCTRL_SPRSIZE) ? 15 : 7) - yOffset;
+        
         uint16_t addr;
         if (!(state->ppuctrl & PPUCTRL_SPRSIZE)) {
             //8x8 sprite
             addr =
-                yOffset |                                           //fine y offset
+                yOffset & 0x7 |                                     //fine y offset
                 (msbp ? 0x8 : 0) |                                  //bit plane
                 (uint16_t)sprite->tile << 4 |                       //tile number
                 ((state->ppuctrl & PPUCTRL_SPRTABLE) ? 0x1000 : 0); //half of pattern table
         } else {
             //8x16 sprite
             uint8_t tile = sprite->tile & 0xFE;
-            if ((!(sprite->attributes & OAMATTR_FLIP_V) && (state->scanline - sprite->y) >= 8) ||
-                ((sprite->attributes & OAMATTR_FLIP_V) && (state->scanline - sprite->y) < 8))
+            if (yOffset >= 8)
             {
                 tile++;
             }
             addr =
-                yOffset |                               //fine y offset
+                yOffset & 0x7 |                         //fine y offset
                 (msbp ? 0x8 : 0) |                      //bit plane
-                tile << 4 |                             //tile number
+                (uint16_t)tile << 4 |                   //tile number
                 ((sprite->tile & 0x1) ? 0x1000 : 0);    //half of pattern table
         }
         if (!msbp)

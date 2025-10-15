@@ -179,11 +179,16 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
         if (emu->save_dir[0] == '\0') {
             printf("Battery save path is not set, cannot load or save battery saves.\n");
         } else {
+            //Build save path: save dir + ROM name + ".sav"
             strncpy(emu->save_path, emu->save_dir, sizeof(emu->save_path));
 
             const char *rom_name = strrchr(filename, '/');
-            if (rom_name == NULL)
+            const char *rom_name_backslash = strrchr(filename, '\\');
+            if (rom_name_backslash > rom_name)
+                rom_name = rom_name_backslash;
+            if (rom_name == NULL) {
                 rom_name = filename;
+            }
             else
                 rom_name++;
             strncat(emu->save_path, rom_name, sizeof(emu->save_path) - 1);
@@ -193,6 +198,7 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
                 *extension = '\0';
             strncat(emu->save_path, ".sav", sizeof(emu->save_path));
 
+            //Open save file
             emu->save_file = fopen(emu->save_path, "ab+");
             if (!emu->save_file) {
                 fprintf(stderr, "Error opening save file ");
