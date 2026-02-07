@@ -8,3 +8,4 @@ This emulator currently supports the following mappers:
 
 ## Dependencies
 - SDL2
+- Dear ImGui (included in repository as a Git submodule)
