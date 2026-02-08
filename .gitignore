@@ -1,0 +1,8 @@
+out/
+build/
+libs/
+.vscode/
+CMakePresets.json
+
+cpu.log
+saves/
