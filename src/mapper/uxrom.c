@@ -1,25 +1,25 @@
 #include "uxrom.h"
-#include <stdlib.h>
+#include "mapper.h"
 
-MapperBase *UxROM_New()
+int UxROM_Init(Mapper *mapper, const INESHeader *ines)
 {
-    MapperBase* mapper = calloc(1, sizeof(UxROM));
-    mapper->vtable = &UXROM_VTBL;
-    return mapper;
+    mapper->f.WriteRegisters = &UxROM_WriteRegisters;
+
+    MapPRGPages(mapper, 0xC0, 0xFF, -0x4000 / 0x100, PRGTYPE_PRG_ROM);
+    MapCHRPages(mapper, 0x00, 0x1F, 0x0, CHRTYPE_DEFAULT);
+    MapNametable(mapper, ines->nt_mirroring ? NT_MIRROR_VERTICAL : NT_MIRROR_HORIZONTAL);
+
+    UxROM_UpdateBanks(mapper);
+    return 0;
 }
 
-void UxROM_Init(UxROM *mapper, const INESHeader *romHeader, FILE *romFile)
+void UxROM_WriteRegisters(Mapper *mapper, uint16_t addr, uint8_t data)
 {
-    MapperBase *base = (MapperBase*)mapper;
-
-    Mapper_MapPRGROM_16k(base, false, 0);
-    Mapper_MapPRGROM_16k(base, true, Mapper_PRGROM16k_Size(base) - 1);
-    Mapper_InitVRAM(base, 0x800);
-    Mapper_MapNTMirroring(base, romHeader->nt_mirroring ? NT_MIRROR_VERTICAL : NT_MIRROR_HORIZONTAL);
+    mapper->uxrom.bank = data;
+    UxROM_UpdateBanks(mapper);
 }
 
-void UxROM_RegWrite(UxROM *mapper, uint16_t addr, uint8_t data)
+void UxROM_UpdateBanks(Mapper *mapper)
 {
-    MapperBase *base = (MapperBase*)mapper;
-    Mapper_MapPRGROM_16k(base, false, data % Mapper_PRGROM16k_Size(base));
+    MapPRGPages(mapper, 0x80, 0xBF, mapper->uxrom.bank * 0x4000 / 0x100, PRGTYPE_PRG_ROM);
 }

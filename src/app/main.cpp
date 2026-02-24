@@ -66,6 +66,10 @@ int main(int argc, char* argv[]) {
 
     // Create emulator
     emulator = Emu_Create();
+    
+    // Set (and create if needed) saves directory
+    std::filesystem::create_directory("saves");
+    Emu_SetSavePath(emulator, "saves/");
 
     // 16-bit 44.1khz audio
     audioSpec.freq = 44100;
@@ -167,7 +171,7 @@ int main(int argc, char* argv[]) {
 
             ImGui_ImplSDL2_ProcessEvent(&event);
         }
-
+        
         if (Emu_IsROMLoaded(emulator) && !paused) {
             //Run emulator
             if (Emu_RunFrame(emulator) != 0)

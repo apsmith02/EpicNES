@@ -7,21 +7,21 @@ extern "C" {
 
 #include "nes_defs.h"
 #include "rom.h"
-#include "mapper/mapper_base.h"
+#include "mapper/mapper.h"
 #include "cpu.h"
 #include "ppu.h"
 #include "apu.h"
 #include "dma.h"
 #include "standard_controller.h"
 
-typedef struct {
+struct Emulator {
     INESHeader rom_ines;
     CPU cpu;
     PPU ppu;
     APU apu;
-    StandardController controller;
     DMAController dma;
-    MapperBase *mapper;
+    StandardController controller;
+    Mapper mapper;
     uint8_t ram[0x800];
 
     char save_dir[256];
@@ -30,7 +30,7 @@ typedef struct {
 
     char save_path[256];
     FILE *save_file;
-} Emulator;
+};
 
 Emulator* Emu_Create();
 

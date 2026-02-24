@@ -1,106 +1,75 @@
 #include "mmc1.h"
-#include <stdlib.h>
+#include "mapper.h"
 
-void MMC1_UpdateBanks(MMC1 *mapper) {
-    MapperBase *base = (MapperBase*)mapper;
-    //Nametable arrangement
-    switch (mapper->control & 0x3) {
-        case 0:
-            Mapper_MapNTMirroring(base, NT_MIRROR_ONESCREEN_A);
-            break;
-        case 1:
-            Mapper_MapNTMirroring(base, NT_MIRROR_ONESCREEN_B);
-            break;
-        case 2:
-            Mapper_MapNTMirroring(base, NT_MIRROR_VERTICAL);
-            break;
-        case 3:
-            Mapper_MapNTMirroring(base, NT_MIRROR_HORIZONTAL);
-            break;
-    }
-    //PRG ROM bank
-    switch ((mapper->control >> 2) & 0x3) {
-        case 0:
-        case 1:
-            //Switch 32KB at $8000, ignore low bit of bank number
-            Mapper_MapPRGROM_16k(base, 0, (mapper->prg_bank & 0xE) % Mapper_PRGROM16k_Size(base));
-            Mapper_MapPRGROM_16k(base, 1, ((mapper->prg_bank & 0xE) + 1) % Mapper_PRGROM16k_Size(base));
-            break;
-        case 2:
-            //Fix first bank at $8000 and switch 16KB bank at $C000
-            Mapper_MapPRGROM_16k(base, 0, 0);
-            Mapper_MapPRGROM_16k(base, 1, mapper->prg_bank % Mapper_PRGROM16k_Size(base));
-            break;
-        case 3:
-            //Fix last bank at $C000 and switch 16KB bank at $8000
-            Mapper_MapPRGROM_16k(base, 0, mapper->prg_bank % Mapper_PRGROM16k_Size(base));
-            Mapper_MapPRGROM_16k(base, 1, Mapper_PRGROM16k_Size(base) - 1);
-            break;
-    }
-    //CHR ROM bank
-    if (mapper->control & 0x10) {
-        //Switch two separate 4KB banks
-        if (base->chr_rom_size == 0) {
-            Mapper_MapCHRRAM_4k(base, 0, 0, mapper->chr_bank0 % Mapper_CHRRAM4k_Size(base));
-            Mapper_MapCHRRAM_4k(base, 1, 1, mapper->chr_bank1 % Mapper_CHRRAM4k_Size(base));
-        } else {
-            Mapper_MapCHRROM_4k(base, 0, 0, mapper->chr_bank0 % Mapper_CHRROM4k_Size(base));
-            Mapper_MapCHRROM_4k(base, 1, 1, mapper->chr_bank1 % Mapper_CHRROM4k_Size(base));
-        }
-    } else {
-        //Switch 8KB at a time
-        if (base->chr_rom_size == 0)
-            Mapper_MapCHRRAM_4k(base, 0, 1, (mapper->chr_bank0 & 0xFE) % Mapper_CHRRAM4k_Size(base));
-        else
-            Mapper_MapCHRROM_4k(base, 0, 1, (mapper->chr_bank0 & 0xFE) % Mapper_CHRROM4k_Size(base));
-    }
-}
-
-MapperBase *MMC1_New()
+int MMC1_Init(Mapper *mapper, const INESHeader *ines)
 {
-    MapperBase* mmc1 = calloc(1, sizeof(MMC1));
-    mmc1->vtable = &MMC1_VTBL;
-    return mmc1;
-}
+    MMC1* mmc1 = &mapper->mmc1;
 
-void MMC1_Init(MMC1 *mapper, const INESHeader *romHeader, FILE *romFile)
-{
-    MapperBase *base = (MapperBase*)mapper;
+    mapper->f.WriteRegisters = &MMC1_WriteRegisters;
+    
+    mmc1->shift = 0b10000; //Initialize shift register with a 1 to detect when it is full
+    mmc1->control |= 0x0C; //Power on in the last PRG ROM bank
 
-    Mapper_InitVRAM(base, 0x800);
-
-    mapper->shift = 0b10000; //Initialize shift register with a 1 to detect when it is full
-    mapper->control |= 0x0C; //Power on in the last PRG ROM bank
     MMC1_UpdateBanks(mapper);
+
+    Mapper_ResizePRGRAM(mapper, 0x2000);
+    MapPRGPages(mapper, 0x60, 0x7F, 0x0, PRGTYPE_PRG_RAM);
+
+    return 0;
 }
 
-void MMC1_RegWrite(MMC1 *mapper, uint16_t addr, uint8_t data)
+void MMC1_WriteRegisters(Mapper *mapper, uint16_t addr, uint8_t data)
 {
+    MMC1* mmc1 = &mapper->mmc1;
+
     if (addr >= 0x8000) {
-        bool srFull = mapper->shift & 1;
-        mapper->shift >>= 1;
-        mapper->shift |= (data & 1) << 4;
+        bool srFull = mmc1->shift & 1;
+        mmc1->shift >>= 1;
+        mmc1->shift |= (data & 1) << 4;
         if (data & 0x80) {
-            //Bit 7 set: Clear shift register, set control to control OR $0C, fixing PRG ROM at $C000-$FFFF to the last bank
-            mapper->shift = 0b10000;
-            mapper->control |= 0x0C;
+            //Bit 7 set: Clear SR, fix PRG ROM at $C000-$FFFF to last bank
+            mmc1->shift = 0b10000;
+            mmc1->control |= 0x0C;
         } else if (srFull) {
             //SR full: Write to bank register
-            if (addr <= 0x9FFF) {
-                //$8000-$9FFF: Control
-                mapper->control = mapper->shift;
-            } else if (addr <= 0xBFFF) {
-                //$A000-$BFFF: CHR bank 0
-                mapper->chr_bank0 = mapper->shift;
-            } else if (addr <= 0xDFFF) {
-                //$C000-$DFFF: CHR bank 1
-                mapper->chr_bank1 = mapper->shift;
-            } else {
-                //$E000-$FFFF: PRG bank
-                mapper->prg_bank = mapper->shift;
-            }
-            mapper->shift = 0b10000;
+            if (addr <= 0x9FFF)         mmc1->control = mmc1->shift;    //$8000-$9FFF
+            else if (addr <= 0xBFFF)    mmc1->chr_bank0 = mmc1->shift;  //$A000-$BFFF
+            else if (addr <= 0xDFFF)    mmc1->chr_bank1 = mmc1->shift;  //$C000-$DFFF
+            else                        mmc1->prg_bank = mmc1->shift;   //$E000-$FFFF
+
+            mmc1->shift = 0b10000;
+            MMC1_UpdateBanks(mapper);
         }
-        MMC1_UpdateBanks(mapper);
+    }
+}
+
+void MMC1_UpdateBanks(Mapper *mapper)
+{
+    MMC1* mmc1 = &mapper->mmc1;
+
+    switch (mmc1->control & 0x3) {
+        case 0: MapNametable(mapper, NT_MIRROR_ONESCREEN_A); break;
+        case 1: MapNametable(mapper, NT_MIRROR_ONESCREEN_B); break;
+        case 2: MapNametable(mapper, NT_MIRROR_VERTICAL); break;
+        case 3: MapNametable(mapper, NT_MIRROR_HORIZONTAL); break;
+    }
+
+    switch ((mmc1->control >> 2) & 0x3) {
+        case 0:
+        case 1: MapPRGPages(mapper, 0x80, 0xFF, (mmc1->prg_bank & 0x0E) * 0x4000 / 0x100, PRGTYPE_PRG_ROM);
+                break;
+        case 2: MapPRGPages(mapper, 0x80, 0xBF, 0x0, PRGTYPE_PRG_ROM);
+                MapPRGPages(mapper, 0xC0, 0xFF, (mmc1->prg_bank & 0x0F) * 0x4000 / 0x100, PRGTYPE_PRG_ROM);
+                break;
+        case 3: MapPRGPages(mapper, 0x80, 0xBF, (mmc1->prg_bank & 0x0F) * 0x4000 / 0x100, PRGTYPE_PRG_ROM);
+                MapPRGPages(mapper, 0xC0, 0xFF, -0x4000 / 0x100, PRGTYPE_PRG_ROM);
+                break;
+    }
+
+    if (!(mmc1->control & 0x10)) {
+        MapCHRPages(mapper, 0x00, 0x1F, (mmc1->chr_bank0 & 0x1E) * 0x1000 / 0x100, CHRTYPE_DEFAULT);
+    } else {
+        MapCHRPages(mapper, 0x00, 0x0F, (mmc1->chr_bank0 & 0x1F) * 0x1000 / 0x100, CHRTYPE_DEFAULT);
+        MapCHRPages(mapper, 0x10, 0x1F, (mmc1->chr_bank1 & 0x1F) * 0x1000 / 0x100, CHRTYPE_DEFAULT);
     }
 }

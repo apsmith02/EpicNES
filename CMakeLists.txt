@@ -26,7 +26,7 @@ set(IMGUI_SOURCES
 
 set(EMU_CORE_SOURCES
     src/emulator.c src/rom.c src/cpu.c src/ppu.c src/standard_controller.c src/apu.c src/dma.c
-    src/mapper/mapper_base.c src/mapper/nrom.c src/mapper/uxrom.c src/mapper/mmc1.c
+    src/mapper/mapper.c src/mapper/nrom.c src/mapper/mmc1.c src/mapper/uxrom.c
     src/ring_buffer.c src/sdl_audio_buffer.c
 )
 set(EMU_APP_SOURCES

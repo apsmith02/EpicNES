@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-#include "mappers.h"
 
 /* PRIVATE FUNCTIONS */
 
@@ -36,7 +35,7 @@ uint8_t OnCPURead(void* emulator, uint16_t addr) {
         data = StdController_Read(&emu->controller, addr);
     } else if (addr >= 0x4020) {
         //Cartridge
-        data = Mapper_CPURead(emu->mapper, addr);
+        data = emu->mapper.f.CPURead(&emu->mapper, addr);
     }
 
     APU_CPUCycle(&emu->apu);
@@ -70,7 +69,7 @@ void OnCPUWrite(void* emulator, uint16_t addr, uint8_t data) {
         Write4016(emu, addr, data);
     } else if (addr >= 0x4020) {
         //Cartridge
-        Mapper_CPUWrite(emu->mapper, addr, data);
+        emu->mapper.f.CPUWrite(&emu->mapper, addr, data);
     }
 
     APU_CPUCycle(&emu->apu);
@@ -89,12 +88,12 @@ void OnCPUHalt(void *emulator, CPU *cpu, uint16_t nextAddr) {
 
 uint8_t OnPPURead(void* emulator, uint16_t addr) {
     Emulator* emu = (Emulator*)emulator;
-    return Mapper_PPURead(emu->mapper, addr);
+    return emu->mapper.f.PPURead(&emu->mapper, addr);
 }
 
 void OnPPUWrite(void* emulator, uint16_t addr, uint8_t data) {
     Emulator* emu = (Emulator*)emulator;
-    Mapper_PPUWrite(emu->mapper, addr, data);
+    emu->mapper.f.PPUWrite(&emu->mapper, addr, data);
 }
 
 void OnDMCDMA(void *emulator, uint16_t addr) {
@@ -166,13 +165,11 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
     }
     
     //Check and initialize mapper
-    if ((emu->mapper = Mapper_New(ines->mapper)) == NULL) {
-        printf("Error: ROM mapper #%u is not supported by this emulator.\n", ines->mapper);
+    if (Mapper_Init(&emu->mapper, ines, rom_file) != 0) {
         fclose(rom_file);
         Emu_CloseROM(emu);
         return -1;
     }
-    Mapper_Init(emu->mapper, ines, rom_file);
 
     //Load PRG RAM save if there is one
     if (ines->has_battery_saves) {
@@ -207,7 +204,7 @@ int Emu_LoadROM(Emulator *emu, const char *filename)
                 if (fseek(emu->save_file, 0, SEEK_SET) != 0) {
                     perror("Error seeking to beginning of PRG RAM save file");
                 }
-                Mapper_LoadPRGRAM(emu->mapper, emu->save_file);
+                emu->mapper.f.LoadBattery(&emu->mapper, emu->save_file);
             }
         }
     }
@@ -231,15 +228,12 @@ void Emu_CloseROM(Emulator *emu)
             printf("Error reopening save file ");
             perror(emu->save_path);
         } else {
-            Mapper_SavePRGRAM(emu->mapper, emu->save_file);
+            emu->mapper.f.SaveBattery(&emu->mapper, emu->save_file);
             fclose(emu->save_file);
             emu->save_file = NULL;
         }
     }
-    if (emu->mapper) {
-        Mapper_Free(emu->mapper);
-        emu->mapper = NULL;
-    }
+    Mapper_Cleanup(&emu->mapper);
     emu->is_rom_loaded = 0;
 }
 

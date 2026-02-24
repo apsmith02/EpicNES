@@ -1,19 +1,17 @@
 #ifndef UXROM_H
 #define UXROM_H
 
-#include "mapper_base.h"
+#include <stdint.h>
+#include "rom.h"
+typedef struct Mapper Mapper;
 
 typedef struct {
-    MapperBase base;
+    uint8_t bank; // ($8000-$FFFF): Select 16KB PRG ROM bank for CPU $8000-$BFFF
 } UxROM;
 
-MapperBase* UxROM_New();
-void UxROM_Init(UxROM* mapper, const INESHeader* romHeader, FILE* romFile);
-void UxROM_RegWrite(UxROM* mapper, uint16_t addr, uint8_t data);
+int UxROM_Init(Mapper* mapper, const INESHeader* ines);
+void UxROM_WriteRegisters(Mapper* mapper, uint16_t addr, uint8_t data);
 
-static const MapperVtable UXROM_VTBL = {
-    .Init = (void(*)(MapperBase*, const INESHeader*, FILE*))UxROM_Init,
-    .RegWrite = (void(*)(MapperBase*, uint16_t, uint8_t))UxROM_RegWrite
-};
+void UxROM_UpdateBanks(Mapper* mapper);
 
 #endif
